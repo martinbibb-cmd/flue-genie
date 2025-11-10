@@ -1,0 +1,51 @@
+body {
+  margin: 0;
+  font-family: sans-serif;
+}
+#app {
+  display: flex;
+  height: 100vh;
+}
+#sidebar {
+  width: 260px;
+  padding: 1rem;
+  border-right: 1px solid #ccc;
+  overflow-y: auto;
+}
+#sceneCanvas {
+  background: #f7f7f7;
+  display: block;
+}
+main {
+  flex: 1;
+  padding: 1rem;
+}
+#tools button {
+  display: block;
+  width: 100%;
+  margin-bottom: 0.3rem;
+}
+#tools .primary {
+  background: #0070f3;
+  color: white;
+}
+#results {
+  margin-top: 1rem;
+}
+#resultsTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+#resultsTable th,
+#resultsTable td {
+  border: 1px solid #ddd;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.85rem;
+}
+.pass {
+  color: green;
+}
+.fail {
+  color: red;
+  font-weight: bold;
+}

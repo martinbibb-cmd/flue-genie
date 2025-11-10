@@ -1,74 +1,57 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Flue Helper – Worcester 8000</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="css/styles.css" />
-</head>
-<body>
-  <h1>Flue Helper – Worcester 8000</h1>
-  <p>Load photo → 5-point flue (L,R,C,T,B) → paint objects (eaves, window, gutter…) → app picks clearance rule and shows two options.</p>
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Flue clearance sandbox</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <h2>Flue checker</h2>
+        <label>
+          Manufacturer
+          <select id="manufacturerSelect"></select>
+        </label>
 
-  <input type="file" id="imgLoader" accept="image/*" multiple />
+        <h3>Clearances (mm)</h3>
+        <div id="clearanceFields"></div>
 
-  <div id="imageList" class="img-list"></div>
+        <h3>Paint tool</h3>
+        <div id="tools">
+          <button data-tool="window">Window</button>
+          <button data-tool="door">Door</button>
+          <button data-tool="eaves">Eaves</button>
+          <button data-tool="gutter">Gutter</button>
+          <button data-tool="downpipe">Downpipe</button>
+          <button data-tool="corner">Corner</button>
+          <button data-tool="boundary">Boundary</button>
+          <button data-tool="flue" class="primary">Place flue</button>
+        </div>
 
-  <div class="toolbar">
-    <button id="mode-start5" class="active">1. Mark flue (5-point)</button>
-    <select id="paintType">
-      <option value="window">Paint: Window</option>
-      <option value="eaves">Paint: Eaves / Soffit</option>
-      <option value="gutter">Paint: Gutter / Pipe / Drain</option>
-      <option value="downpipe">Paint: Downpipe</option>
-      <option value="boundary">Paint: Boundary / Surface</option>
-    </select>
-    <button id="mode-paint">2. Paint</button>
-    <button id="clearThis">Clear photo</button>
-    <button id="clearAll">Clear ALL</button>
-  </div>
+        <input type="file" id="bgUpload" accept="image/*" />
 
-  <div class="inline-inputs">
-    <label>
-      Required clearance (override) mm
-      <input type="number" id="reqClear" value="" placeholder="leave blank to auto" />
-    </label>
-    <label>
-      Plume tube (mm)
-      <input type="number" id="plumeDia" value="60" />
-    </label>
-    <label>
-      Terminal symbol (mm)
-      <input type="number" id="terminalDia" value="100" />
-    </label>
-  </div>
-
-  <div id="canvas-wrapper">
-    <canvas id="c"></canvas>
-  </div>
-
-  <div class="previews">
-    <div class="preview-block">
-      <h3>Option A: Move flue</h3>
-      <canvas id="optA" width="320" height="240"></canvas>
+        <button id="suggestPlumeBtn">Suggest plume kit</button>
+      </aside>
+      <main>
+        <canvas id="sceneCanvas" width="900" height="600"></canvas>
+        <div id="results">
+          <h3>Checks</h3>
+          <table id="resultsTable">
+            <thead>
+              <tr>
+                <th>Object</th>
+                <th>Rule</th>
+                <th>Required</th>
+                <th>Actual</th>
+                <th>OK?</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </main>
     </div>
-    <div class="preview-block">
-      <h3>Option B: Plume kit</h3>
-      <canvas id="optB" width="320" height="240"></canvas>
-    </div>
-  </div>
-
-  <div id="rulePanel" class="card">
-    <h3>Detected objects &amp; rules</h3>
-    <div id="ruleList"></div>
-  </div>
-
-  <div class="card">
-    <h3>Depot Notes JSON</h3>
-    <pre id="output">{"sections":[]}</pre>
-  </div>
-
-  <script src="js/data/worcester8000.js"></script>
-  <script src="js/app.js"></script>
-</body>
+    <script type="module" src="app.js"></script>
+  </body>
 </html>
