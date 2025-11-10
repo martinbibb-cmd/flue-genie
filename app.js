@@ -53,7 +53,7 @@ function setTool(toolName) {
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+  if (bgImage) ctx.drawImage(bgImage, 0, 0);
 
   paintedObjects.forEach((obj) => {
     ctx.save();
@@ -149,8 +149,10 @@ function evaluateAndRender(extraFlue = null) {
 // canvas events
 canvas.addEventListener("mousedown", (e) => {
   const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top) * scaleY;
 
   // first: can we grab the flue?
   if (fluePoint) {
@@ -183,8 +185,10 @@ canvas.addEventListener("mousedown", (e) => {
 canvas.addEventListener("mousemove", (e) => {
   if (!isDraggingFlue) return;
   const rect = canvas.getBoundingClientRect();
-  fluePoint.x = e.clientX - rect.left;
-  fluePoint.y = e.clientY - rect.top;
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  fluePoint.x = (e.clientX - rect.left) * scaleX;
+  fluePoint.y = (e.clientY - rect.top) * scaleY;
   evaluateAndRender();
 });
 
@@ -215,6 +219,10 @@ bgUpload.addEventListener("change", (e) => {
   const img = new Image();
   img.onload = () => {
     bgImage = img;
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.style.width = `${img.width}px`;
+    canvas.style.height = `${img.height}px`;
     draw();
   };
   img.src = URL.createObjectURL(file);
