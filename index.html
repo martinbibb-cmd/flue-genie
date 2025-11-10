@@ -1,439 +1,74 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Depot Replacement – Self-Build Tree UI</title>
-<link rel="preconnect" href="https://unpkg.com">
-<style>
-:root{
-  --bg:#0b0d10; --panel:#12171d; --tile:#1a1f27; --ink:#e9eef5; --muted:#9fb0c2;
-  --accent:#4aa3ff; --ok:#3ecf8e; --warn:#ffc247; --bad:#ff6b6b; --frame:#1e2631;
-  --haz-a:#9aa0a6; --haz-e:#ffd54f; --haz-w:#ff9f43;
-}
-*{box-sizing:border-box} html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
-
-/* Top bar */
-header{position:sticky;top:0;z-index:40;display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--frame);background:linear-gradient(0deg,#0b0d10,#0e1217)}
-header .title{font-weight:700}
-header .actions{margin-left:auto;display:flex;gap:8px}
-button{appearance:none;border:1px solid var(--frame);background:var(--panel);color:var(--ink);padding:8px 12px;border-radius:10px;font-weight:600;cursor:pointer}
-button:hover{border-color:var(--accent)}
-
-/* Canvas */
-main{min-height:calc(100vh - 56px);display:grid;grid-template-columns:1fr}
-#canvas{padding:16px;display:grid;gap:14px}
-.grove{display:grid;gap:14px}
-.grove.root{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
-.grove.branch{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
-
-.tile{
-  background:var(--tile);border:1px solid var(--frame);border-radius:18px;overflow:hidden;
-  display:flex;flex-direction:column;min-height:160px;position:relative;transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-}
-.tile:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(0,0,0,.28);border-color:#2a3340}
-.media{aspect-ratio:16/9;background:#0f151d;border-bottom:1px solid var(--frame);display:flex;align-items:center;justify-content:center;overflow:hidden}
-.media img{width:100%;height:100%;object-fit:cover}
-.body{padding:12px 12px 52px}
-.tile h3{margin:0 0 6px;font-size:16px}
-.tile p{margin:0;color:var(--muted);font-size:13px}
-.foot{position:absolute;left:10px;right:10px;bottom:10px;display:flex;justify-content:space-between;align-items:center}
-.chips{display:flex;gap:6px;flex-wrap:wrap}
-.chip{font-size:11px;border:1px solid var(--frame);padding:2px 6px;border-radius:999px;color:var(--muted)}
-.badge{font-size:11px;border:1px solid var(--frame);padding:2px 8px;border-radius:999px}
-.badge.sel{border-color:var(--ok);color:var(--ok)}
-.badge.radio{border-color:#2a3340}
-.badge.check{border-color:#2a3340}
-.count{position:absolute;top:8px;right:8px;background:#0f1318;border:1px solid var(--frame);border-radius:999px;padding:2px 8px;font-size:11px}
-
-/* Floating Safety */
-#safetyFab{
-  position:fixed;right:16px;bottom:16px;z-index:60;display:flex;flex-direction:column;align-items:flex-end;gap:8px
-}
-.fab-btn{
-  width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:var(--panel);border:1px solid var(--frame);cursor:pointer;font-size:20px
-}
-#safetyPanel{
-  width:min(420px,calc(100vw - 32px));max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--frame);
-  border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:12px;display:none
-}
-#safetyPanel.open{display:block}
-.haz-row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 8px}
-.tag{display:inline-flex;gap:6px;align-items:center;padding:4px 8px;border-radius:999px;border:1px solid var(--frame);background:#0f1318;color:var(--muted);font-size:12px}
-.tag[data-type="asb"]{border-color:var(--haz-a);color:var(--haz-a)}
-.tag[data-type="ele"]{border-color:var(--haz-e);color:var(--haz-e)}
-.tag[data-type="wah"]{border-color:var(--haz-w);color:var(--haz-w)}
-.log{border:1px solid var(--frame);border-radius:12px;padding:8px;background:#0f1318;margin-bottom:8px}
-.log small{color:var(--muted)}
-
-/* Footer */
-#footer{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:40;background:#0f1318aa;border:1px solid var(--frame);backdrop-filter:blur(8px);padding:8px;border-radius:14px;display:flex;gap:8px}
-
-@media (max-width: 920px){
-  main{padding-bottom:70px}
-  #footer{left:auto;right:16px;transform:none}
-}
-</style>
+  <meta charset="utf-8" />
+  <title>Flue Helper – Worcester 8000</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-<header>
-  <div class="title">🌳 Depot Tree – Self-Build UI</div>
-  <div class="actions">
-    <button id="btnBack">⬅️ Back</button>
-    <button id="btnRoot">🌳 Root</button>
-    <button id="btnExport">💾 Export JSON</button>
+  <h1>Flue Helper – Worcester 8000</h1>
+  <p>Load photo → 5-point flue (L,R,C,T,B) → paint objects (eaves, window, gutter…) → app picks clearance rule and shows two options.</p>
+
+  <input type="file" id="imgLoader" accept="image/*" multiple />
+
+  <div id="imageList" class="img-list"></div>
+
+  <div class="toolbar">
+    <button id="mode-start5" class="active">1. Mark flue (5-point)</button>
+    <select id="paintType">
+      <option value="window">Paint: Window</option>
+      <option value="eaves">Paint: Eaves / Soffit</option>
+      <option value="gutter">Paint: Gutter / Pipe / Drain</option>
+      <option value="downpipe">Paint: Downpipe</option>
+      <option value="boundary">Paint: Boundary / Surface</option>
+    </select>
+    <button id="mode-paint">2. Paint</button>
+    <button id="clearThis">Clear photo</button>
+    <button id="clearAll">Clear ALL</button>
   </div>
-</header>
 
-<main><section id="canvas"></section></main>
-
-<div id="footer">
-  <button id="btnNext">➡️ Next</button>
-  <button id="btnDone">✅ Done</button>
-</div>
-
-<!-- Floating safety -->
-<div id="safetyFab">
-  <div id="safetyPanel">
-    <b>🧯 Safety</b>
-    <div class="haz-row" id="hazRow"></div>
-    <div id="logList"></div>
+  <div class="inline-inputs">
+    <label>
+      Required clearance (override) mm
+      <input type="number" id="reqClear" value="" placeholder="leave blank to auto" />
+    </label>
+    <label>
+      Plume tube (mm)
+      <input type="number" id="plumeDia" value="60" />
+    </label>
+    <label>
+      Terminal symbol (mm)
+      <input type="number" id="terminalDia" value="100" />
+    </label>
   </div>
-  <button class="fab-btn" id="fabToggle" title="Safety"><span>🧯</span></button>
-</div>
 
-<script src="https://unpkg.com/markdown-it@13.0.2/dist/markdown-it.min.js"></script>
-<script>
-/* ---------------------------------------------------------
-   Self-building Tree UI with menu markers:
-   ::menu[single] ::menu[multi] ::menu[repeat]
-   --------------------------------------------------------- */
-const md = window.markdownit({html:false,linkify:true,typographer:true});
-const state = {
-  tree:null, path:[], selections:{}, counts:{}, logs:[],
-  hazards:{ electrical:false, wah:false, asbestos:false },
-  hazardSources:{ electrical:new Set(), wah:new Set(), asbestos:new Set() }
-};
-const MENU_DEFAULT = 'single';
+  <div id="canvas-wrapper">
+    <canvas id="c"></canvas>
+  </div>
 
-function slug(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') + '-' + Math.random().toString(36).slice(2,6) }
+  <div class="previews">
+    <div class="preview-block">
+      <h3>Option A: Move flue</h3>
+      <canvas id="optA" width="320" height="240"></canvas>
+    </div>
+    <div class="preview-block">
+      <h3>Option B: Plume kit</h3>
+      <canvas id="optB" width="320" height="240"></canvas>
+    </div>
+  </div>
 
-async function loadMarkdown(){
-  try{
-    const r = await fetch('content.md',{cache:'no-store'}); if(!r.ok) throw 0; return await r.text();
-  }catch{ return document.getElementById('demoMd')?.textContent || '# Start\n'; }
-}
+  <div id="rulePanel" class="card">
+    <h3>Detected objects &amp; rules</h3>
+    <div id="ruleList"></div>
+  </div>
 
-function parseMenuMarker(text){
-  const m = text.match(/::menu\[(single|multi|repeat)\]/i);
-  return m ? m[1].toLowerCase() : null;
-}
-function stripMarkers(text){ return text.replace(/::menu\[(single|multi|repeat)\]\s*/ig,'').trim(); }
+  <div class="card">
+    <h3>Depot Notes JSON</h3>
+    <pre id="output">{"sections":[]}</pre>
+  </div>
 
-function mdToTree(src){
-  const tokens = md.parse(src,{});
-  const root = {id:'root',title:'Root',body:'',img:null,menu:MENU_DEFAULT,children:[]};
-  const stack = [{level:0,node:root}];
-  let cur = root;
-  for(let i=0;i<tokens.length;i++){
-    const t = tokens[i];
-    if(t.type==='heading_open'){
-      const level = parseInt(t.tag.slice(1),10);
-      let j=i+1,title='';
-      while(tokens[j] && tokens[j].type!=='heading_close'){
-        if(tokens[j].type==='inline') title += tokens[j].content;
-        j++;
-      }
-      const node = {id:slug(title||'section'), level, title:title||'Untitled', body:'', img:null, chips:[], menu:MENU_DEFAULT, children:[]};
-      while(stack.length && stack[stack.length-1].level >= level) stack.pop();
-      stack[stack.length-1].node.children.push(node);
-      stack.push({level,node});
-      cur = node; i=j; continue;
-    }
-    if(t.type==='inline' && cur){
-      const content = t.content || '';
-      if(t.children){ for(const c of t.children){ if(c.type==='image'){ cur.img = c.attrGet('src') || cur.img; } } }
-      cur.body += content + '\n';
-    }
-    if(t.type==='bullet_list_open'){
-      let j=i+1;
-      while(tokens[j] && tokens[j].type!=='bullet_list_close'){
-        if(tokens[j].type==='inline'){ const txt=tokens[j].content.trim(); if(txt) cur.chips.push(txt); }
-        j++;
-      }
-      i=j;
-    }
-  }
-  walk(root, n=>{
-    const m = parseMenuMarker(n.body||'');
-    if(m){ n.menu = m; n.body = stripMarkers(n.body||''); }
-  });
-  return root;
-}
-
-function walk(node,fn){ fn(node); (node.children||[]).forEach(c=>walk(c,fn)); }
-
-function getNodeByPath(path){
-  let n = state.tree;
-  for(const id of path){ const next = n.children.find(c=>c.id===id); if(next) n=next; else break; }
-  return n;
-}
-
-function findNode(id){ let found=null; walk(state.tree, n=>{ if(n.id===id) found=n; }); return found; }
-
-function isSelected(id){ return !!state.selections[id]; }
-function selectItem(parentId, childId, menu){
-  if(menu==='single'){
-    const p = findNode(parentId);
-    if(p){ (p.children||[]).forEach(c=>{ delete state.selections[c.id]; }); }
-    state.selections[childId] = true;
-  }else if(menu==='multi'){
-    if(state.selections[childId]) delete state.selections[childId]; else state.selections[childId] = true;
-  }else{
-    state.selections[childId] = true;
-    state.counts[childId] = (state.counts[childId]||0) + 1;
-  }
-  saveState();
-}
-
-function render(node){
-  const canvas = document.getElementById('canvas');
-  canvas.innerHTML = '';
-  const grove = document.createElement('div');
-  grove.className = 'grove ' + (node.id==='root'?'root':'branch');
-
-  const kids = node.children||[];
-  kids.forEach(child=>{
-    const tile = document.createElement('div'); tile.className='tile'; tile.dataset.id = child.id;
-
-    const media = document.createElement('div'); media.className='media';
-    media.innerHTML = child.img ? `<img src="${child.img}" alt="">` : `<div style="opacity:.5;font-size:13px">No image</div>`;
-    tile.appendChild(media);
-
-    const body = document.createElement('div'); body.className='body';
-    const hint = (child.body||'').split('\n').find(x=>x.trim())||'';
-    body.innerHTML = `<h3>${child.title}</h3><p>${hint}</p>`;
-    tile.appendChild(body);
-
-    const foot = document.createElement('div'); foot.className='foot';
-    const chips = document.createElement('div'); chips.className='chips';
-    (child.chips||[]).slice(0,4).forEach(text=>{
-      const s=document.createElement('span'); s.className='chip'; s.textContent=text; chips.appendChild(s);
-      const t = text.toLowerCase();
-      if(t.includes('asbestos')) logHaz('asbestos', child.id, 'Asbestos flagged: '+child.title);
-      if(t.includes('wah')||t.includes('ladder')||t.includes('roof')) logHaz('wah', child.id, 'WAH: '+child.title);
-      if(t.includes('electrical')||t.includes('socket')) logHaz('electrical', child.id, 'Electrical: '+child.title);
-    });
-    foot.appendChild(chips);
-
-    const parentMenu = node.menu || MENU_DEFAULT;
-    const badge = document.createElement('span'); badge.className='badge';
-    if(parentMenu==='single'){ badge.textContent = isSelected(child.id)?'● Selected':'○ Single'; badge.classList.toggle('sel', isSelected(child.id)); badge.classList.add('radio'); }
-    if(parentMenu==='multi'){  badge.textContent = isSelected(child.id)?'☑ Selected':'☐ Multi';  badge.classList.toggle('sel', isSelected(child.id)); badge.classList.add('check'); }
-    if(parentMenu==='repeat'){ badge.textContent = '↻ Repeat'; const c = state.counts[child.id]||0; if(c>0){ const cnt=document.createElement('span'); cnt.className='count'; cnt.textContent='×'+c; tile.appendChild(cnt);} }
-    foot.appendChild(badge);
-
-    tile.addEventListener('click', (e)=>{
-      if(e.metaKey || e.ctrlKey){
-        if((child.children||[]).length){ state.path.push(child.id); render(child); saveState(); return; }
-      }
-      selectItem(node.id, child.id, parentMenu);
-      if(parentMenu==='single' && (child.children||[]).length){ state.path.push(child.id); render(child); saveState(); }
-      updateSafety();
-    });
-
-    tile.addEventListener('dblclick', ()=>{
-      if((child.children||[]).length){ state.path.push(child.id); render(child); saveState(); }
-    });
-
-    tile.appendChild(foot);
-    grove.appendChild(tile);
-  });
-
-  canvas.appendChild(grove);
-  updateSafety();
-}
-
-function log(text, photo){
-  state.logs.unshift({text,photo:photo||null,ts:new Date().toISOString()});
-  renderLogs(); saveState();
-}
-function renderLogs(){
-  const list = document.getElementById('logList'); list.innerHTML='';
-  state.logs.forEach(L=>{
-    const d=document.createElement('div'); d.className='log';
-    d.innerHTML = `<div>${L.text}${L.photo?'<br><img src="'+L.photo+'" style="max-width:100%;border-radius:8px;margin-top:6px">':''}</div><small>${new Date(L.ts).toLocaleString()}</small>`;
-    list.appendChild(d);
-  });
-}
-function logHaz(kind, nodeId, msg){
-  const set = ensureHazardSource(kind);
-  const seen = nodeId ? set.has(nodeId) : false;
-  if(nodeId) set.add(nodeId);
-  if(kind==='electrical') state.hazards.electrical = true;
-  if(kind==='wah')        state.hazards.wah = true;
-  if(kind==='asbestos')   state.hazards.asbestos = true;
-  if(msg && !seen) log(msg);
-  updateSafety(); saveState();
-}
-function ensureHazardSource(kind){
-  if(!state.hazardSources[kind]) state.hazardSources[kind] = new Set();
-  return state.hazardSources[kind];
-}
-function updateSafety(){
-  const row = document.getElementById('hazRow'); row.innerHTML='';
-  if(state.hazards.electrical) row.append(tag('⚡ Electrical','ele'));
-  if(state.hazards.wah)        row.append(tag('🪜 WAH','wah'));
-  if(state.hazards.asbestos)   row.append(tag('🧱 Asbestos','asb'));
-  if(!row.children.length) row.append(tag('No hazards'));
-}
-function tag(text,type){ const s=document.createElement('span'); s.className='tag'; if(type) s.dataset.type=type; s.textContent=text; return s; }
-
-/* Controls */
-document.getElementById('btnBack').addEventListener('click', ()=>{
-  if(state.path.length) state.path.pop();
-  render(getNodeByPath(state.path));
-  saveState();
-});
-document.getElementById('btnRoot').addEventListener('click', ()=>{
-  state.path=[]; render(state.tree); saveState();
-});
-document.getElementById('btnExport').addEventListener('click', ()=>{
-  const data = {meta:{app:'Depot Self-Build',ts:new Date().toISOString()}, path:state.path, selections:state.selections, counts:state.counts, hazards:state.hazards, logs:state.logs};
-  const hazardSources = {}; for(const k of Object.keys(state.hazardSources)){ hazardSources[k] = Array.from(state.hazardSources[k]); }
-  data.hazardSources = hazardSources;
-  const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:'depot-journey.json'}); document.body.appendChild(a); a.click(); a.remove();
-});
-document.getElementById('btnNext').addEventListener('click', ()=>{
-  const cur = getNodeByPath(state.path);
-  const selectedId = (cur.children||[]).find(c=>state.selections[c.id])?.id;
-  const nextNode = selectedId ? findNode(selectedId) : cur.children?.[0];
-  if(nextNode && nextNode.children?.length){ state.path.push(nextNode.id); render(nextNode); saveState(); }
-});
-document.getElementById('btnDone').addEventListener('click', ()=>{ log('Marked branch as Done ✅'); });
-
-/* FAB */
-document.getElementById('fabToggle').addEventListener('click', ()=>{
-  document.getElementById('safetyPanel').classList.toggle('open');
-});
-
-/* Persistence */
-function saveState(){
-  try{
-    const hazardSources = {}; for(const k of Object.keys(state.hazardSources||{})){ const src = state.hazardSources[k]; hazardSources[k] = Array.from(src instanceof Set ? src : new Set(src||[])); }
-    localStorage.setItem('depot-selfbuild', JSON.stringify({path:state.path,selections:state.selections,counts:state.counts,logs:state.logs,hazards:state.hazards,hazardSources}));
-  }catch(e){}
-}
-function restoreState(){
-  try{
-    const s=JSON.parse(localStorage.getItem('depot-selfbuild')||'{}');
-    state.path = Array.isArray(s.path)?s.path:[];
-    state.selections = s.selections||{};
-    state.counts = s.counts||{};
-    state.logs = s.logs||[];
-    state.hazards = Object.assign({ electrical:false, wah:false, asbestos:false }, s.hazards||{});
-    const src = s.hazardSources||{};
-    for(const k of ['electrical','wah','asbestos']){
-      const arr = src[k]||[];
-      state.hazardSources[k] = new Set(Array.isArray(arr)?arr:[]);
-      if(arr.length){ state.hazards[k==='wah'?'wah':k] = true; }
-    }
-  }catch(e){}
-}
-
-/* Boot */
-(async function(){
-  restoreState();
-  const src = await loadMarkdown();
-  state.tree = mdToTree(src);
-  if(!Array.isArray(state.path)) state.path=[];
-  render(getNodeByPath(state.path));
-  renderLogs(); updateSafety();
-})();
-</script>
-
-<!-- Demo fallback MD (delete when using content.md) -->
-<script type="text/plain" id="demoMd">
-# Current System 🌡️
-::menu[single]
-![](img/system_root.png)
-Pick the existing system type.
-
-## Regular (Open Vented)
-![](img/regular_schematic.png)
-Legacy gravity/fully pumped. Electrical socket near boiler – electrical
-- Y-Plan (3-port)
-- Loft ladder steep – WAH
-- Asbestos board behind boiler – asbestos
-
-### Cylinder Type
-::menu[multi]
-![](img/cylinder_types.png)
-Pick all that apply.
-- Open-vented (F&E in loft)
-- Unvented (pressurised)
-- Thermal Store – asbestos check
-
-## System (Sealed)
-![](img/system_schematic.png)
-Pressurised primaries; remote PRV possible.
-- See photo – PRV route
-- Electrical spur needed – electrical
-
-## Combi
-![](img/combi_schematic.png)
-Shared mains performance caveat.
-- Gas upsizing likely
-- Stopcock photo – electrical
-
-# Proposed System 🌱
-::menu[single]
-![](img/proposed_root.png)
-Choose the new boiler family.
-
-## Ideal Logic System 24 kW
-![](img/ideal_logic_system.png)
-Clearances: top 165, bottom 100, sides 2.5, front 450. Remote PRV – yes.
-
-### Flue
-::menu[single]
-![](img/flue_options.png)
-- Horizontal – 300 mm to openings, 600 mm to boundary
-- Vertical (pitched/flat) – WAH
-- Direct rear
-
-### Condensate
-::menu[single]
-![](img/condensate.png)
-- Internal to waste stack (trap)
-- External < 3 m insulated – frost
-- External ≥ 3 m trace heat – frost
-
-### Gas Route
-::menu[multi]
-![](img/gas_pipework.png)
-- 22 mm ≤ 24 kW run OK
-- U6 meter present
-- Check for galvanised – asbestos note
-- Ladder access required – WAH
-
-# Extras ➕
-::menu[repeat]
-![](img/extras.png)
-Tap the same tile again to increment count.
-## Powerflush
-![](img/filter.png)
-Pre-install flush + inhibitor.
-
-## Fernox TF1 Omega Filter
-![](img/filter.png)
-Fit on return close to boiler.
-
-## Hive Controls
-![](img/controls.png)
-2-channel where cylinder present – electrical
-</script>
+  <script src="js/data/worcester8000.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
