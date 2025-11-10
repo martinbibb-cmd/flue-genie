@@ -1,60 +1,76 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Flue clearance sandbox</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <div id="app">
-      <aside id="sidebar">
-        <h2>Flue checker</h2>
-        <label>
-          Manufacturer
-          <select id="manufacturerSelect"></select>
-        </label>
+<head>
+  <meta charset="utf-8" />
+  <title>Flue checker</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h2>Flue checker</h2>
 
-        <h3>Clearances (mm)</h3>
-        <div id="clearanceFields"></div>
+      <label>
+        Manufacturer
+        <select id="manufacturerSelect"></select>
+      </label>
 
-        <h3>Paint tool</h3>
-        <div id="tools">
-          <button data-tool="window">Window</button>
-          <button data-tool="door">Door</button>
-          <button data-tool="eaves">Eaves</button>
-          <button data-tool="gutter">Gutter</button>
-          <button data-tool="downpipe">Downpipe</button>
-          <button data-tool="corner">Corner</button>
-          <button data-tool="boundary">Boundary</button>
-          <button data-tool="flue" class="primary">Place flue</button>
+      <h3>Clearances (mm)</h3>
+      <div id="clearanceFields"></div>
+
+      <h3>Paint tool</h3>
+      <div id="tools">
+        <button data-tool="window">Window</button>
+        <button data-tool="door">Door</button>
+        <button data-tool="eaves">Eaves</button>
+        <button data-tool="gutter">Gutter</button>
+        <button data-tool="downpipe">Downpipe</button>
+        <button data-tool="boundary">Boundary</button>
+        <button data-tool="flue" class="primary">Flue circle</button>
+      </div>
+
+      <label>
+        Actual flue dia (mm)
+        <input type="number" id="flueMm" value="100" />
+      </label>
+
+      <label>
+        Plume tube (mm)
+        <input type="number" id="plumeMm" value="60" />
+      </label>
+
+      <input type="file" id="bgUpload" accept="image/*" />
+
+    </aside>
+    <main>
+      <div id="canvasWrapper">
+        <canvas id="sceneCanvas" width="900" height="600"></canvas>
+      </div>
+
+      <div class="previews">
+        <div>
+          <h3>Option A: move flue</h3>
+          <canvas id="optA" width="320" height="240"></canvas>
         </div>
-
-        <input type="file" id="bgUpload" accept="image/*" />
-
-        <button id="suggestPlumeBtn">Suggest plume kit</button>
-      </aside>
-      <main>
-        <div id="canvasWrapper">
-          <canvas id="sceneCanvas" width="900" height="600"></canvas>
+        <div>
+          <h3>Option B: plume kit</h3>
+          <canvas id="optB" width="320" height="240"></canvas>
         </div>
-        <div id="results">
-          <h3>Checks</h3>
-          <table id="resultsTable">
-            <thead>
-              <tr>
-                <th>Object</th>
-                <th>Rule</th>
-                <th>Required</th>
-                <th>Actual</th>
-                <th>OK?</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </main>
-    </div>
-    <script type="module" src="app.js"></script>
-  </body>
+      </div>
+
+      <h3>Checks</h3>
+      <table id="resultsTable">
+        <thead>
+          <tr>
+            <th>Object</th><th>Rule</th><th>Req</th><th>Actual</th><th>OK?</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
 </html>

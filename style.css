@@ -1,69 +1,65 @@
 body {
   margin: 0;
-  font-family: sans-serif;
-  min-height: 100vh;
+  font-family: -apple-system, system-ui, sans-serif;
 }
 #app {
   display: flex;
   height: 100vh;
 }
 #sidebar {
-  width: 260px;
-  padding: 1rem;
-  border-right: 1px solid #ccc;
+  width: 250px;
+  border-right: 1px solid #ddd;
+  padding: 10px;
   overflow-y: auto;
-  box-sizing: border-box;
-}
-#sceneCanvas {
-  background: #f7f7f7;
-  display: block;
-  width: 100%;
-  height: auto;
-  max-width: 100%;
-  touch-action: none;
 }
 main {
   flex: 1;
-  padding: 1rem;
+  padding: 10px;
   overflow: auto;
-  box-sizing: border-box;
 }
 #canvasWrapper {
-  width: 100%;
-  max-width: 900px;
-  margin: 0 auto;
+  display: inline-block;
+}
+#sceneCanvas {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  touch-action: none; /* important for iOS */
 }
 #tools button {
   display: block;
   width: 100%;
-  margin-bottom: 0.3rem;
+  margin-bottom: 4px;
 }
 #tools .primary {
   background: #0070f3;
-  color: white;
+  color: #fff;
 }
-#results {
-  margin-top: 1rem;
+#tools button.active {
+  outline: 2px solid #0070f3;
+}
+.previews {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+pre {
+  white-space: pre-wrap;
 }
 #resultsTable {
   width: 100%;
   border-collapse: collapse;
+  font-size: 12px;
 }
-#resultsTable th,
-#resultsTable td {
+#resultsTable td, #resultsTable th {
   border: 1px solid #ddd;
-  padding: 0.25rem 0.4rem;
-  font-size: 0.85rem;
+  padding: 3px 6px;
 }
-.pass {
-  color: green;
-}
-.fail {
-  color: red;
-  font-weight: bold;
-}
+.pass { color: green; }
+.fail { color: red; font-weight: 600; }
 
-@media (max-width: 1024px) {
+@media (max-width: 900px) {
   #app {
     flex-direction: column;
     height: auto;
@@ -72,59 +68,10 @@ main {
   #sidebar {
     width: 100%;
     border-right: none;
-    border-bottom: 1px solid #ccc;
+    border-bottom: 1px solid #ddd;
   }
 
-  main {
-    width: 100%;
-  }
-}
-
-@media (max-width: 768px) {
-  body {
-    min-height: 100%;
-  }
-
-  #tools {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 0.4rem;
-  }
-
-  #tools button {
-    width: 100%;
-    margin-bottom: 0;
-  }
-
-  #resultsTable,
-  #resultsTable thead,
-  #resultsTable tbody,
-  #resultsTable th,
-  #resultsTable td,
-  #resultsTable tr {
-    display: block;
-  }
-
-  #resultsTable thead tr {
-    display: none;
-  }
-
-  #resultsTable tr {
-    margin-bottom: 0.5rem;
-    border: 1px solid #ddd;
-    padding: 0.5rem;
-  }
-
-  #resultsTable td {
-    border: none;
-    padding: 0.2rem 0;
-  }
-
-  #resultsTable td::before {
-    content: attr(data-label) ": ";
-    font-weight: bold;
-    display: inline-block;
-    width: 50%;
-    max-width: 8rem;
+  .previews {
+    flex-direction: column;
   }
 }
