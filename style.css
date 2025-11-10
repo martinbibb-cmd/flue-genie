@@ -18,6 +18,7 @@ body {
   width: auto;
   height: auto;
   max-width: none;
+  touch-action: none;
 }
 main {
   flex: 1;
