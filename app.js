@@ -221,8 +221,8 @@ bgUpload.addEventListener("change", (e) => {
     bgImage = img;
     canvas.width = img.width;
     canvas.height = img.height;
-    canvas.style.width = `${img.width}px`;
-    canvas.style.height = `${img.height}px`;
+    canvas.style.width = img.width + "px";
+    canvas.style.height = img.height + "px";
     draw();
   };
   img.src = URL.createObjectURL(file);

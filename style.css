@@ -15,12 +15,17 @@ body {
 #sceneCanvas {
   background: #f7f7f7;
   display: block;
-  max-width: 100%;
+  width: auto;
   height: auto;
+  max-width: none;
 }
 main {
   flex: 1;
   padding: 1rem;
+  overflow: auto;
+}
+#canvasWrapper {
+  display: inline-block;
 }
 #tools button {
   display: block;
