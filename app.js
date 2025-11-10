@@ -19,6 +19,16 @@ let fluePoint = null;
 let isDraggingFlue = false;
 let bgImage = null;
 
+function getCanvasPos(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (evt.clientX - rect.left) * scaleX,
+    y: (evt.clientY - rect.top) * scaleY
+  };
+}
+
 function populateManufacturers() {
   Object.entries(MANUFACTURER_RULES).forEach(([key, val]) => {
     const opt = document.createElement("option");
@@ -147,57 +157,62 @@ function evaluateAndRender(extraFlue = null) {
 }
 
 // canvas events
-canvas.addEventListener("mousedown", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const x = (e.clientX - rect.left) * scaleX;
-  const y = (e.clientY - rect.top) * scaleY;
+function onPointerDown(evt) {
+  evt.preventDefault();
+  const { x, y } = getCanvasPos(evt);
 
-  // first: can we grab the flue?
   if (fluePoint) {
     const d = Math.hypot(x - fluePoint.x, y - fluePoint.y);
     if (d <= FLUE_RADIUS + 4) {
       isDraggingFlue = true;
+      if (canvas.setPointerCapture) {
+        canvas.setPointerCapture(evt.pointerId);
+      }
       return;
     }
   }
 
-  // otherwise: normal tool
   if (currentTool === "flue") {
     fluePoint = { x, y };
     evaluateAndRender();
-  } else {
-    paintedObjects.push({
-      id: Date.now(),
-      type: currentTool,
-      x,
-      y,
-      w: 80,
-      h: 80
-    });
-    // if we already have a flue, re-evaluate
-    if (fluePoint) evaluateAndRender();
-    else draw();
+    return;
   }
-});
 
-canvas.addEventListener("mousemove", (e) => {
+  paintedObjects.push({
+    id: Date.now(),
+    type: currentTool,
+    x,
+    y,
+    w: 80,
+    h: 80
+  });
+  if (fluePoint) evaluateAndRender();
+  else draw();
+}
+
+function onPointerMove(evt) {
   if (!isDraggingFlue) return;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  fluePoint.x = (e.clientX - rect.left) * scaleX;
-  fluePoint.y = (e.clientY - rect.top) * scaleY;
+  evt.preventDefault();
+  const { x, y } = getCanvasPos(evt);
+  fluePoint.x = x;
+  fluePoint.y = y;
   evaluateAndRender();
-});
+}
 
-canvas.addEventListener("mouseup", () => {
-  if (isDraggingFlue) {
-    isDraggingFlue = false;
-    evaluateAndRender();
+function onPointerUp(evt) {
+  if (!isDraggingFlue) return;
+  evt.preventDefault();
+  isDraggingFlue = false;
+  if (canvas.hasPointerCapture && canvas.hasPointerCapture(evt.pointerId)) {
+    canvas.releasePointerCapture(evt.pointerId);
   }
-});
+  evaluateAndRender();
+}
+
+canvas.addEventListener("pointerdown", onPointerDown);
+canvas.addEventListener("pointermove", onPointerMove);
+canvas.addEventListener("pointerup", onPointerUp);
+canvas.addEventListener("pointercancel", onPointerUp);
 
 // tool buttons
 document.querySelectorAll("#tools button").forEach((btn) => {
