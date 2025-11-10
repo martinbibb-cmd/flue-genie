@@ -1,6 +1,7 @@
 body {
   margin: 0;
   font-family: sans-serif;
+  min-height: 100vh;
 }
 #app {
   display: flex;
@@ -11,22 +12,26 @@ body {
   padding: 1rem;
   border-right: 1px solid #ccc;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 #sceneCanvas {
   background: #f7f7f7;
   display: block;
-  width: auto;
+  width: 100%;
   height: auto;
-  max-width: none;
+  max-width: 100%;
   touch-action: none;
 }
 main {
   flex: 1;
   padding: 1rem;
   overflow: auto;
+  box-sizing: border-box;
 }
 #canvasWrapper {
-  display: inline-block;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
 }
 #tools button {
   display: block;
@@ -56,4 +61,70 @@ main {
 .fail {
   color: red;
   font-weight: bold;
+}
+
+@media (max-width: 1024px) {
+  #app {
+    flex-direction: column;
+    height: auto;
+  }
+
+  #sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #ccc;
+  }
+
+  main {
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    min-height: 100%;
+  }
+
+  #tools {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.4rem;
+  }
+
+  #tools button {
+    width: 100%;
+    margin-bottom: 0;
+  }
+
+  #resultsTable,
+  #resultsTable thead,
+  #resultsTable tbody,
+  #resultsTable th,
+  #resultsTable td,
+  #resultsTable tr {
+    display: block;
+  }
+
+  #resultsTable thead tr {
+    display: none;
+  }
+
+  #resultsTable tr {
+    margin-bottom: 0.5rem;
+    border: 1px solid #ddd;
+    padding: 0.5rem;
+  }
+
+  #resultsTable td {
+    border: none;
+    padding: 0.2rem 0;
+  }
+
+  #resultsTable td::before {
+    content: attr(data-label) ": ";
+    font-weight: bold;
+    display: inline-block;
+    width: 50%;
+    max-width: 8rem;
+  }
 }

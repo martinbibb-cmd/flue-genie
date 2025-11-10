@@ -144,13 +144,25 @@ function evaluateAndRender(extraFlue = null) {
   resultsBody.innerHTML = "";
   rows.forEach((r) => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${r.object}</td>
-      <td>${r.rule}</td>
-      <td>${r.required}</td>
-      <td>${r.actual}</td>
-      <td class="${r.pass ? "pass" : "fail"}">${r.pass ? "✔" : "✖"}</td>
-    `;
+    const columns = [
+      { label: "Object", value: r.object },
+      { label: "Rule", value: r.rule },
+      { label: "Required", value: r.required },
+      { label: "Actual", value: r.actual },
+      {
+        label: "OK?",
+        value: r.pass ? "✔" : "✖",
+        className: r.pass ? "pass" : "fail"
+      }
+    ];
+
+    columns.forEach((col) => {
+      const td = document.createElement("td");
+      td.textContent = col.value;
+      td.dataset.label = col.label;
+      if (col.className) td.className = col.className;
+      tr.appendChild(td);
+    });
     resultsBody.appendChild(tr);
   });
   draw();
@@ -236,8 +248,8 @@ bgUpload.addEventListener("change", (e) => {
     bgImage = img;
     canvas.width = img.width;
     canvas.height = img.height;
-    canvas.style.width = img.width + "px";
-    canvas.style.height = img.height + "px";
+    canvas.style.width = "100%";
+    canvas.style.height = "auto";
     draw();
   };
   img.src = URL.createObjectURL(file);
