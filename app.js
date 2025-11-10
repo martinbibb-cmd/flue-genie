@@ -8,11 +8,15 @@ const resultsBody = document.querySelector("#resultsTable tbody");
 const bgUpload = document.getElementById("bgUpload");
 const suggestPlumeBtn = document.getElementById("suggestPlumeBtn");
 
+const FLUE_RADIUS = 12;
+
 let currentManufacturerKey = "ideal";
-let currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
+let currentClearances = MANUFACTURER_RULES[currentManufacturerKey].clearances;
 let currentTool = "window";
+
 let paintedObjects = [];
 let fluePoint = null;
+let isDraggingFlue = false;
 let bgImage = null;
 
 function populateManufacturers() {
@@ -49,9 +53,8 @@ function setTool(toolName) {
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (bgImage) {
-    ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
-  }
+  if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+
   paintedObjects.forEach((obj) => {
     ctx.save();
     const colours = {
@@ -73,11 +76,16 @@ function draw() {
     ctx.fillText(obj.type, obj.x + 4, obj.y + 12);
     ctx.restore();
   });
+
   if (fluePoint) {
     ctx.beginPath();
-    ctx.arc(fluePoint.x, fluePoint.y, 6, 0, Math.PI * 2);
+    ctx.arc(fluePoint.x, fluePoint.y, FLUE_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = "red";
     ctx.fill();
+    ctx.strokeStyle = "black";
+    ctx.stroke();
+    ctx.fillStyle = "white";
+    ctx.fillText("flue", fluePoint.x + FLUE_RADIUS + 4, fluePoint.y);
   }
 }
 
@@ -107,7 +115,10 @@ function ruleForObject(objType) {
 
 function evaluateAndRender(extraFlue = null) {
   const fp = extraFlue || fluePoint;
-  if (!fp) return;
+  if (!fp) {
+    draw();
+    return;
+  }
   const rows = [];
   paintedObjects.forEach((obj) => {
     const distPx = distancePointToRect(fp.x, fp.y, obj);
@@ -135,10 +146,22 @@ function evaluateAndRender(extraFlue = null) {
   draw();
 }
 
-canvas.addEventListener("click", (e) => {
+// canvas events
+canvas.addEventListener("mousedown", (e) => {
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
+
+  // first: can we grab the flue?
+  if (fluePoint) {
+    const d = Math.hypot(x - fluePoint.x, y - fluePoint.y);
+    if (d <= FLUE_RADIUS + 4) {
+      isDraggingFlue = true;
+      return;
+    }
+  }
+
+  // otherwise: normal tool
   if (currentTool === "flue") {
     fluePoint = { x, y };
     evaluateAndRender();
@@ -151,15 +174,33 @@ canvas.addEventListener("click", (e) => {
       w: 80,
       h: 80
     });
-    draw();
+    // if we already have a flue, re-evaluate
     if (fluePoint) evaluateAndRender();
+    else draw();
   }
 });
 
+canvas.addEventListener("mousemove", (e) => {
+  if (!isDraggingFlue) return;
+  const rect = canvas.getBoundingClientRect();
+  fluePoint.x = e.clientX - rect.left;
+  fluePoint.y = e.clientY - rect.top;
+  evaluateAndRender();
+});
+
+canvas.addEventListener("mouseup", () => {
+  if (isDraggingFlue) {
+    isDraggingFlue = false;
+    evaluateAndRender();
+  }
+});
+
+// tool buttons
 document.querySelectorAll("#tools button").forEach((btn) => {
   btn.addEventListener("click", () => setTool(btn.dataset.tool));
 });
 
+// manufacturer change
 manufacturerSelect.addEventListener("change", () => {
   currentManufacturerKey = manufacturerSelect.value;
   currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
@@ -167,6 +208,7 @@ manufacturerSelect.addEventListener("change", () => {
   if (fluePoint) evaluateAndRender();
 });
 
+// background image
 bgUpload.addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -178,16 +220,20 @@ bgUpload.addEventListener("change", (e) => {
   img.src = URL.createObjectURL(file);
 });
 
+// plume suggestion
 suggestPlumeBtn.addEventListener("click", () => {
   if (!fluePoint) return;
+  // shove 100px to the right for plume demo
   const plumePoint = { x: fluePoint.x + 100, y: fluePoint.y };
   evaluateAndRender(plumePoint);
+  // draw plume marker
   ctx.beginPath();
-  ctx.arc(plumePoint.x, plumePoint.y, 5, 0, Math.PI * 2);
+  ctx.arc(plumePoint.x, plumePoint.y, FLUE_RADIUS - 4, 0, Math.PI * 2);
   ctx.fillStyle = "purple";
   ctx.fill();
 });
 
+// init
 populateManufacturers();
 renderClearanceFields();
 draw();
