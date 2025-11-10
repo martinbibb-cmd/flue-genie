@@ -7,6 +7,7 @@ const clearanceFields = document.getElementById("clearanceFields");
 const resultsBody = document.querySelector("#resultsTable tbody");
 const bgUpload = document.getElementById("bgUpload");
 const suggestPlumeBtn = document.getElementById("suggestPlumeBtn");
+const undoBtn = document.getElementById("undoBtn");
 
 const FLUE_RADIUS = 12;
 
@@ -18,6 +19,47 @@ let paintedObjects = [];
 let fluePoint = null;
 let isDraggingFlue = false;
 let bgImage = null;
+let dragStartFlue = null;
+
+const history = [];
+
+function pushHistory(entry) {
+  history.push(entry);
+}
+
+function undoLastAction() {
+  const last = history.pop();
+  if (!last) return;
+
+  switch (last.type) {
+    case "addObject": {
+      const idx = paintedObjects.findIndex((obj) => obj.id === last.id);
+      if (idx !== -1) {
+        paintedObjects.splice(idx, 1);
+      }
+      break;
+    }
+    case "setFlue": {
+      fluePoint = last.previous ? { ...last.previous } : null;
+      break;
+    }
+    case "moveFlue": {
+      if (last.previous) {
+        if (!fluePoint) {
+          fluePoint = { ...last.previous };
+        } else {
+          fluePoint.x = last.previous.x;
+          fluePoint.y = last.previous.y;
+        }
+      }
+      break;
+    }
+    default:
+      return;
+  }
+
+  evaluateAndRender();
+}
 
 function getCanvasPos(evt) {
   const rect = canvas.getBoundingClientRect();
@@ -165,6 +207,7 @@ function onPointerDown(evt) {
     const d = Math.hypot(x - fluePoint.x, y - fluePoint.y);
     if (d <= FLUE_RADIUS + 4) {
       isDraggingFlue = true;
+      dragStartFlue = { ...fluePoint };
       if (canvas.setPointerCapture) {
         canvas.setPointerCapture(evt.pointerId);
       }
@@ -173,19 +216,23 @@ function onPointerDown(evt) {
   }
 
   if (currentTool === "flue") {
+    const previousFlue = fluePoint ? { ...fluePoint } : null;
     fluePoint = { x, y };
+    pushHistory({ type: "setFlue", previous: previousFlue, next: { ...fluePoint } });
     evaluateAndRender();
     return;
   }
 
-  paintedObjects.push({
+  const newObject = {
     id: Date.now(),
     type: currentTool,
     x,
     y,
     w: 80,
     h: 80
-  });
+  };
+  paintedObjects.push(newObject);
+  pushHistory({ type: "addObject", id: newObject.id });
   if (fluePoint) evaluateAndRender();
   else draw();
 }
@@ -206,6 +253,17 @@ function onPointerUp(evt) {
   if (canvas.hasPointerCapture && canvas.hasPointerCapture(evt.pointerId)) {
     canvas.releasePointerCapture(evt.pointerId);
   }
+  if (
+    dragStartFlue &&
+    (dragStartFlue.x !== fluePoint.x || dragStartFlue.y !== fluePoint.y)
+  ) {
+    pushHistory({
+      type: "moveFlue",
+      previous: { ...dragStartFlue },
+      next: { ...fluePoint }
+    });
+  }
+  dragStartFlue = null;
   evaluateAndRender();
 }
 
@@ -255,6 +313,8 @@ suggestPlumeBtn.addEventListener("click", () => {
   ctx.fillStyle = "purple";
   ctx.fill();
 });
+
+undoBtn.addEventListener("click", undoLastAction);
 
 // init
 populateManufacturers();

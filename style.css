@@ -37,6 +37,15 @@ main {
   background: #0070f3;
   color: white;
 }
+#undoBtn {
+  display: block;
+  width: 100%;
+  margin: 0.6rem 0;
+}
+#undoBtn.secondary {
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+}
 #results {
   margin-top: 1rem;
 }
