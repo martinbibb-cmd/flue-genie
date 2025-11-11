@@ -128,6 +128,24 @@ function mapAiLabelToKind(label = "") {
   return null;
 }
 
+function buildOverlaysFromUserMarks() {
+  return paintedObjects
+    .map(shape => {
+      if (!shape || !Array.isArray(shape.points) || shape.points.length === 0) {
+        return null;
+      }
+      const rule = ruleForKind(shape.kind);
+      return {
+        type: "polygon",
+        label: rule.label,
+        zone: "no-go",
+        points: shape.points.map(pt => ({ x: pt.x, y: pt.y })),
+        confidence: 0.5
+      };
+    })
+    .filter(Boolean);
+}
+
 function applyAiAreasToPaintedObjects(areas, { replaceExisting = true, source = "ai" } = {}) {
   if (!Array.isArray(areas) || areas.length === 0) {
     return 0;
@@ -595,14 +613,14 @@ function formatAiAreaLabel(area, { fallback = "AI area" } = {}) {
   return `${baseLabel}${conf}`;
 }
 
-function renderLegend() {
+function renderLegendFromAI(areas) {
   if (!legendEl) return;
   legendEl.innerHTML = "";
-  if (!aiOverlays || aiOverlays.length === 0) {
+  if (!areas || areas.length === 0) {
     return;
   }
 
-  aiOverlays.forEach((area, index) => {
+  areas.forEach((area, index) => {
     const palette = colourForZone(area.zone);
     const wrapper = document.createElement("div");
     const label = formatAiAreaLabel(area, { fallback: "AI area" });
@@ -610,6 +628,10 @@ function renderLegend() {
     wrapper.innerHTML = `<strong style="color:${palette.text}">#${index + 1}</strong> ${info}`;
     legendEl.appendChild(wrapper);
   });
+}
+
+function renderLegend() {
+  renderLegendFromAI(aiOverlays);
 }
 
 function renderSuggestions() {
@@ -1406,7 +1428,7 @@ async function runAutoDetect() {
   setRoughBrushMode(false);
   draw();
 
-  const payload = buildAIPayload({ includeMarks: false });
+  const payload = buildAiPayload({ includeMarks: false });
   payload.mode = "detect-only";
 
   if (autoDetectBtn) {
@@ -1462,7 +1484,7 @@ async function runRoughBrushCleanup() {
   setAIStatus("Cleaning rough brush with AI…");
 
   try {
-    const payload = buildAIPayload({ includeMarks: false });
+    const payload = buildAiPayload({ includeMarks: false });
     payload.mode = "rough-clean";
     payload.rough = roughStrokes.map(pt => ({ x: pt.x, y: pt.y }));
 
@@ -1496,9 +1518,9 @@ async function runRoughBrushCleanup() {
   }
 }
 
-function buildAIPayload({ includeMarks = true } = {}) {
+function buildAiPayload({ includeMarks = true } = {}) {
   const payload = {
-    image: canvas.toDataURL("image/png"),
+    image: canvas.toDataURL("image/jpeg", 0.6),
     manufacturer: currentManufacturerKey,
     boilerType: boilerTypeSelect ? boilerTypeSelect.value : "fan",
     clearances: { ...currentRules },
@@ -1558,7 +1580,8 @@ async function runAI({ includeMarks = true, button } = {}) {
     return;
   }
 
-  const payload = buildAIPayload({ includeMarks });
+  const payload = buildAiPayload({ includeMarks });
+  payload.mode = "zones";
   const analysingText = includeMarks
     ? "Analysing with your marks..."
     : "Analysing the photo...";
@@ -1572,42 +1595,33 @@ async function runAI({ includeMarks = true, button } = {}) {
   }
 
   aiOverlays = [];
-  renderLegend();
+  renderLegendFromAI(aiOverlays);
   draw();
 
   try {
     const result = await analyseImageWithAI(payload);
-    aiOverlays = normaliseAIResult(result);
-    renderLegend();
-    draw();
+    const rawAreas = Array.isArray(result?.areas) ? result.areas : [];
 
-    if (aiOverlays.length === 0) {
-      if (includeMarks && hasLocalFailures()) {
-        const remedy = getRemedyMessage();
-        const base = "AI found no extra zones, but local check FAILED.";
-        setAIStatus(remedy ? `${base} ${remedy}` : base, { isError: true });
-      } else {
-        const msg = includeMarks
-          ? "AI didn't find additional risks with your marks."
-          : "AI auto zones found no concerns.";
-        const remedy = getRemedyMessage();
-        const combined = remedy ? `${msg} ${remedy}` : msg;
-        setAIStatus(combined.trim());
-      }
+    if (result && result.error) {
+      setAIStatus(`AI error: ${JSON.stringify(result.error)}`, { isError: true });
+      aiOverlays = buildOverlaysFromUserMarks();
+    } else if (rawAreas.length === 0) {
+      setAIStatus("AI returned nothing, using your marks.");
+      aiOverlays = buildOverlaysFromUserMarks();
     } else {
-      const plural = aiOverlays.length === 1 ? "area" : "areas";
-      const suffix = includeMarks ? " using your marks" : " automatically";
-      const msg = `AI highlighted ${aiOverlays.length} ${plural}${suffix}.`;
-      const remedy = getRemedyMessage();
-      const combined = remedy ? `${msg} ${remedy}` : msg;
-      setAIStatus(combined.trim());
+      aiOverlays = normaliseAIResult({ areas: rawAreas });
+      const message = `AI highlighted ${aiOverlays.length} area${aiOverlays.length === 1 ? "" : "s"}. Move flue or plume as indicated.`;
+      setAIStatus(message);
     }
+
+    renderLegendFromAI(aiOverlays);
+    draw();
   } catch (err) {
     console.error("AI analysis failed", err);
     const message = err && err.message ? err.message : "AI analysis failed.";
-    setAIStatus(message, { isError: true });
-    aiOverlays = [];
-    renderLegend();
+    setAIStatus(`AI error: ${message}`, { isError: true });
+    aiOverlays = buildOverlaysFromUserMarks();
+    renderLegendFromAI(aiOverlays);
     draw();
   } finally {
     if (button) {
@@ -1650,18 +1664,19 @@ async function analyseImageWithAI(payload) {
     body: JSON.stringify(payload)
   });
 
-  if (!res.ok) {
-    let errorText = "";
-    try {
-      errorText = await res.text();
-    } catch (_) {
-      // ignore
-    }
-    const statusText = errorText ? `${res.status}: ${errorText}` : `${res.status}`;
-    throw new Error(`AI analysis failed: ${statusText}`);
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    const message = err && err.message ? err.message : "Invalid JSON from AI worker";
+    return { areas: [], error: message };
   }
 
-  return res.json();
+  if (!res.ok) {
+    return { areas: [], error: data }; // worker already wraps error payload
+  }
+
+  return data;
 }
 
 // initial draw
