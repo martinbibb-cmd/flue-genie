@@ -204,14 +204,10 @@ function getSelectedFlueSizeMm() {
   return FLUE_MM;
 }
 
-function getFlueRadiusPx(pxPerMmOverride) {
+function getFlueRadiusPx() {
   if (!flue) return 0;
-  const fluePxDiameter = flue.rx * 2;
-  const pxPerMm = Number.isFinite(pxPerMmOverride) && pxPerMmOverride > 0
-    ? pxPerMmOverride
-    : fluePxDiameter / FLUE_MM;
-  const flueMm = getSelectedFlueSizeMm();
-  return (flueMm / 2) * pxPerMm;
+  // radius in px = half of drawn diameter
+  return Math.min(flue.rx, flue.ry);
 }
 
 // ==== INIT UI ====
@@ -638,9 +634,9 @@ function renderSuggestions() {
   sorted.forEach(result => {
     const li = document.createElement("li");
     if (result.pass) {
-      li.textContent = `${formatObjectLabel(result.kind)} OK – ${result.actual}mm ≥ ${result.required}mm required.`;
+      li.textContent = `${formatObjectLabel(result.kind)} OK – ${result.actual}mm clear ≥ ${result.required}mm required.`;
     } else {
-      li.textContent = `${formatObjectLabel(result.kind)}: move to ≥${result.required}mm (currently ${result.actual}mm).`;
+      li.textContent = `${formatObjectLabel(result.kind)}: move to ≥${result.required}mm clear (currently ${result.actual}mm clear).`;
     }
     aiList.appendChild(li);
   });
@@ -667,10 +663,10 @@ function getRemedyMessage() {
   if (worst) {
     const shortfall = Math.max(0, Math.ceil(worst.deficit));
     const label = worst.result.label || formatObjectLabel(worst.result.kind);
-    return `Move flue at least ${shortfall}mm away from ${label} or fit plume kit.`;
+    return `Move flue at least ${shortfall}mm clear of ${label} or fit plume kit.`;
   }
 
-  return "All clearances satisfied for fan-assisted flue.";
+  return "All edge clearances satisfied for fan-assisted flue.";
 }
 
 // ==== POINTER EVENTS ====
@@ -949,17 +945,17 @@ function forEachShapeSegment(points, callback) {
 function ruleForKind(kind) {
   switch (kind) {
     case "window-opening":
-      return { label: "window opening", mm: currentRules.windowOpening };
+      return { label: "window opening edge clearance", mm: currentRules.windowOpening };
     case "window-fabric":
-      return { label: "window fabric", mm: currentRules.windowFabric };
+      return { label: "window fabric edge clearance", mm: currentRules.windowFabric };
     case "gutter":
-      return { label: "gutter/pipe", mm: currentRules.gutter };
+      return { label: "gutter/pipe edge clearance", mm: currentRules.gutter };
     case "eaves":
-      return { label: "eaves / soffit", mm: currentRules.eaves };
+      return { label: "eaves / soffit edge clearance", mm: currentRules.eaves };
     case "boundary":
-      return { label: "facing surface/boundary", mm: currentRules.boundary };
+      return { label: "facing surface/boundary edge clearance", mm: currentRules.boundary };
     default:
-      return { label: "opening", mm: currentRules.windowOpening };
+      return { label: "opening edge clearance", mm: currentRules.windowOpening };
   }
 }
 
@@ -990,8 +986,10 @@ function evaluateAndRender() {
   }
 
   const fluePxDiameter = flue.rx * 2;
-  const pxPerMm = fluePxDiameter / FLUE_MM;
-  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
+  const flueSizeMm = getSelectedFlueSizeMm();
+  const pxPerMm = flueSizeMm > 0 ? fluePxDiameter / flueSizeMm : 0;
+  const flueRadiusPx = getFlueRadiusPx();
+  const flueRadiusMm = pxPerMm > 0 ? flueRadiusPx / pxPerMm : 0;
   lastPxPerMm = pxPerMm;
 
   paintedObjects.forEach(shape => {
@@ -1019,8 +1017,11 @@ function evaluateAndRender() {
     }
 
     const edgePx = Math.max(0, minPx - flueRadiusPx);
-    const distMm = edgePx / pxPerMm;
+    const centreMm = pxPerMm > 0 ? minPx / pxPerMm : 0;
+    const distMm = pxPerMm > 0 ? edgePx / pxPerMm : 0;
     const actualRounded = Math.round(distMm);
+    const centreRounded = Math.round(centreMm);
+    const requiredCentreMm = rule.mm + flueRadiusMm;
     const evaluation = {
       shape,
       kind: shape.kind,
@@ -1028,6 +1029,10 @@ function evaluateAndRender() {
       required: rule.mm,
       actual: actualRounded,
       actualMm: distMm,
+      centreMm,
+      centreRounded,
+      requiredCentreMm,
+      requiredCentreRounded: Math.round(requiredCentreMm),
       pass: distMm >= rule.mm,
       closestPoint
     };
@@ -1056,7 +1061,7 @@ function evaluateAndRender() {
         distanceAnnotations.push({
           x: result.closestPoint.x,
           y: result.closestPoint.y,
-          text: `#${index + 1}: ${result.actual}mm / ${result.required}mm`,
+          text: `#${index + 1}: ${result.actual}mm clear / ${result.required}mm req`,
           color: result.pass ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.95)"
         });
       }
@@ -1068,7 +1073,7 @@ function evaluateAndRender() {
         <td>${formatObjectLabel(result.kind)}</td>
         <td>${result.label}</td>
         <td>${result.required}</td>
-        <td>${result.actual}</td>
+        <td>${result.actual}mm clear / ${result.centreRounded}mm centre</td>
         <td class="status ${result.pass ? "pass" : "fail"}">${result.pass ? "✔" : "✖"}</td>
       `;
       resultsBody.appendChild(tr);
@@ -1084,8 +1089,9 @@ function evaluateAndRender() {
 function hasLocalFailures() {
   if (!flue) return false;
   const fluePxDiameter = flue.rx * 2;
-  const pxPerMm = fluePxDiameter / FLUE_MM;
-  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
+  const flueSizeMm = getSelectedFlueSizeMm();
+  const pxPerMm = flueSizeMm > 0 ? fluePxDiameter / flueSizeMm : 0;
+  const flueRadiusPx = getFlueRadiusPx();
   for (const shape of paintedObjects) {
     if (!shape.points || shape.points.length < 2) continue;
     let minPx = Infinity;
@@ -1337,7 +1343,7 @@ function renderPreviews(pxPerMm) {
 }
 function getGlobalMinMm(x, y, pxPerMm) {
   if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) return Infinity;
-  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
+  const flueRadiusPx = getFlueRadiusPx();
   let minMm = Infinity;
   paintedObjects.forEach(shape => {
     if (!shape.points || shape.points.length < 2) return;
@@ -1370,7 +1376,7 @@ function findBetterX(startX, y, pxPerMm, currentMinMm) {
 
 function positionSatisfiesAll(x, y, pxPerMm) {
   if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) return false;
-  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
+  const flueRadiusPx = getFlueRadiusPx();
   for (const shape of paintedObjects) {
     if (!shape.points || shape.points.length < 2) continue;
     let minPx = Infinity;
@@ -1501,14 +1507,15 @@ function buildAIPayload({ includeMarks = true } = {}) {
 
   if (flue) {
     const fluePxDiameter = flue.rx * 2;
-    const pxPerMm = fluePxDiameter / FLUE_MM;
+    const flueSizeMm = getSelectedFlueSizeMm();
+    const pxPerMm = flueSizeMm > 0 ? fluePxDiameter / flueSizeMm : 0;
     payload.flue = {
       x: flue.x,
       y: flue.y,
       rx: flue.rx,
       ry: flue.ry,
-      radiusPx: getFlueRadiusPx(pxPerMm),
-      sizeMm: getSelectedFlueSizeMm()
+      radiusPx: getFlueRadiusPx(),
+      sizeMm: flueSizeMm
     };
   }
 
@@ -1520,7 +1527,9 @@ function buildAIPayload({ includeMarks = true } = {}) {
     payload.measurements = (measurementResults || []).map(res => ({
       kind: res.kind,
       requiredMm: res.required,
-      actualMm: res.actual
+      actualMm: res.actual,
+      actualCentreMm: res.centreMm,
+      requiredCentreMm: res.requiredCentreMm
     }));
   } else {
     payload.shapes = [];
