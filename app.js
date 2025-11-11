@@ -2,6 +2,8 @@ import { MANUFACTURER_RULES } from "./data/manufacturerRules.js";
 
 const canvas = document.getElementById("sceneCanvas");
 const ctx = canvas.getContext("2d");
+canvas.style.touchAction = "none";
+
 const manufacturerSelect = document.getElementById("manufacturerSelect");
 const clearanceFields = document.getElementById("clearanceFields");
 const resultsBody = document.querySelector("#resultsTable tbody");
@@ -12,6 +14,7 @@ const optACTX = optACanvas.getContext("2d");
 const optBCanvas = document.getElementById("optB");
 const optBCTX = optBCanvas.getContext("2d");
 const flueSizeBtns = document.querySelectorAll("#flueSizeBtns button");
+const undoBtn = document.getElementById("undoBtn");
 
 let currentManufacturerKey = "ideal";
 let currentClearances = {
@@ -22,14 +25,15 @@ let currentTool = "window";
 let bgImage = null;
 
 let FLUE_MM = 100;
+const HANDLE_SIZE = 14;
 
-const FLUE_HANDLE_HALF = 14;
+let paintedObjects = []; // { kind, points: [{x, y}, ...] }
+let activePolyline = null; // { kind, points }
 
-let paintedObjects = []; // {kind, path:[{x,y},...]}
-
-let flue = null; // {x,y,r}
+let flue = null; // { x, y, rx, ry }
 let draggingFlue = false;
-let draggingFlueHandle = false;
+let draggingFlueW = false;
+let draggingFlueH = false;
 
 function populateManufacturers() {
   Object.entries(MANUFACTURER_RULES).forEach(([key, val]) => {
@@ -78,13 +82,26 @@ function colourForKind(kind) {
   }
 }
 
+function finalizeActivePolyline() {
+  if (!activePolyline) return false;
+  const shouldSave = activePolyline.points.length >= 2;
+  if (shouldSave) {
+    paintedObjects.push(activePolyline);
+  }
+  activePolyline = null;
+  return shouldSave;
+}
+
 function setToolFromButtons() {
-  document.querySelectorAll("#tools button").forEach((btn) => {
+  const toolButtons = document.querySelectorAll("#tools button[data-tool]");
+  toolButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (activePolyline) {
+        finalizeActivePolyline();
+        evaluateAndRender();
+      }
       currentTool = btn.dataset.tool;
-      document
-        .querySelectorAll("#tools button")
-        .forEach((b) => b.classList.remove("active"));
+      toolButtons.forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
     });
   });
@@ -104,166 +121,93 @@ function getCanvasPos(evt) {
   };
 }
 
+function hitFlueBody(pos) {
+  if (!flue) return false;
+  const dx = pos.x - flue.x;
+  const dy = pos.y - flue.y;
+  const val = (dx * dx) / (flue.rx * flue.rx) + (dy * dy) / (flue.ry * flue.ry);
+  return val <= 1;
+}
+
+function hitFlueWidthHandle(pos) {
+  if (!flue) return false;
+  const hx = flue.x + flue.rx;
+  const hy = flue.y;
+  return (
+    Math.abs(pos.x - hx) <= HANDLE_SIZE && Math.abs(pos.y - hy) <= HANDLE_SIZE
+  );
+}
+
+function hitFlueHeightHandle(pos) {
+  if (!flue) return false;
+  const hx = flue.x;
+  const hy = flue.y + flue.ry;
+  return (
+    Math.abs(pos.x - hx) <= HANDLE_SIZE && Math.abs(pos.y - hy) <= HANDLE_SIZE
+  );
+}
+
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
 
   paintedObjects.forEach((obj) => {
+    if (obj.points.length < 2) return;
     ctx.strokeStyle = colourForKind(obj.kind);
-    ctx.lineWidth = 14;
-    ctx.lineCap = "round";
+    ctx.lineWidth = 6;
     ctx.lineJoin = "round";
+    ctx.lineCap = "round";
     ctx.beginPath();
-    obj.path.forEach((pt, i) => {
+    obj.points.forEach((pt, i) => {
       if (i === 0) ctx.moveTo(pt.x, pt.y);
       else ctx.lineTo(pt.x, pt.y);
     });
     ctx.stroke();
   });
 
-  if (flue) {
+  if (activePolyline && activePolyline.points.length) {
+    ctx.strokeStyle = colourForKind(activePolyline.kind);
+    ctx.lineWidth = 6;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(flue.x, flue.y, flue.r, 0, Math.PI * 2);
+    activePolyline.points.forEach((pt, i) => {
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    });
+    ctx.stroke();
+  }
+
+  if (flue) {
     ctx.strokeStyle = "red";
     ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(flue.x, flue.y, flue.rx, flue.ry, 0, 0, Math.PI * 2);
     ctx.stroke();
 
-    const hx = flue.x + flue.r;
-    const hy = flue.y;
     ctx.fillStyle = "white";
     ctx.strokeStyle = "red";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.rect(
-      hx - FLUE_HANDLE_HALF,
-      hy - FLUE_HANDLE_HALF,
-      FLUE_HANDLE_HALF * 2,
-      FLUE_HANDLE_HALF * 2
+      flue.x + flue.rx - HANDLE_SIZE / 2,
+      flue.y - HANDLE_SIZE / 2,
+      HANDLE_SIZE,
+      HANDLE_SIZE
+    );
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.rect(
+      flue.x - HANDLE_SIZE / 2,
+      flue.y + flue.ry - HANDLE_SIZE / 2,
+      HANDLE_SIZE,
+      HANDLE_SIZE
     );
     ctx.fill();
     ctx.stroke();
   }
-}
-
-function pointInFlue(pos) {
-  if (!flue) return false;
-  const d = Math.hypot(pos.x - flue.x, pos.y - flue.y);
-  return d <= flue.r;
-}
-
-function onResizeHandle(pos) {
-  if (!flue) return false;
-  const hx = flue.x + flue.r;
-  const hy = flue.y;
-  return (
-    pos.x >= hx - FLUE_HANDLE_HALF &&
-    pos.x <= hx + FLUE_HANDLE_HALF &&
-    pos.y >= hy - FLUE_HANDLE_HALF &&
-    pos.y <= hy + FLUE_HANDLE_HALF
-  );
-}
-
-let painting = false;
-let currentPath = null;
-
-canvas.addEventListener("pointerdown", (evt) => {
-  evt.preventDefault();
-  const pos = getCanvasPos(evt);
-
-  if (flue && onResizeHandle(pos)) {
-    draggingFlueHandle = true;
-    return;
-  }
-  if (flue && pointInFlue(pos)) {
-    draggingFlue = true;
-    return;
-  }
-
-  if (currentTool === "flue") {
-    flue = { x: pos.x, y: pos.y, r: 60 };
-    evaluateAndRender();
-    draw();
-    return;
-  }
-
-  painting = true;
-  currentPath = { kind: currentTool, path: [pos] };
-  draw();
-});
-
-canvas.addEventListener("pointermove", (evt) => {
-  const pos = getCanvasPos(evt);
-
-  if (draggingFlue && flue) {
-    flue.x = pos.x;
-    flue.y = pos.y;
-    evaluateAndRender();
-    draw();
-    return;
-  }
-  if (draggingFlueHandle && flue) {
-    flue.r = Math.max(10, Math.hypot(pos.x - flue.x, pos.y - flue.y));
-    evaluateAndRender();
-    draw();
-    return;
-  }
-
-  if (painting && currentPath) {
-    currentPath.path.push(pos);
-    draw();
-  }
-});
-
-function endPointerInteraction() {
-  if (painting && currentPath) {
-    paintedObjects.push(currentPath);
-  }
-  painting = false;
-  currentPath = null;
-  draggingFlue = false;
-  draggingFlueHandle = false;
-  evaluateAndRender();
-}
-
-canvas.addEventListener("pointerup", endPointerInteraction);
-canvas.addEventListener("pointercancel", endPointerInteraction);
-
-bgUpload.addEventListener("change", (evt) => {
-  const file = evt.target.files?.[0];
-  if (!file) return;
-  const img = new Image();
-  img.onload = () => {
-    bgImage = img;
-    paintedObjects = [];
-    flue = null;
-    canvas.width = img.width;
-    canvas.height = img.height;
-    canvas.style.width = `${img.width}px`;
-    canvas.style.height = `${img.height}px`;
-    draw();
-    evaluateAndRender();
-  };
-  img.src = URL.createObjectURL(file);
-});
-
-manufacturerSelect.addEventListener("change", () => {
-  currentManufacturerKey = manufacturerSelect.value;
-  currentClearances = {
-    ...MANUFACTURER_RULES[currentManufacturerKey].clearances
-  };
-  renderClearances();
-  evaluateAndRender();
-});
-
-function distancePointToPath(p, path) {
-  let min = Infinity;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const a = path[i];
-    const b = path[i + 1];
-    const d = pointToSegmentDist(p.x, p.y, a.x, a.y, b.x, b.y);
-    if (d < min) min = d;
-  }
-  return min;
 }
 
 function pointToSegmentDist(px, py, x1, y1, x2, y2) {
@@ -275,6 +219,19 @@ function pointToSegmentDist(px, py, x1, y1, x2, y2) {
   const cx = x1 + tt * dx;
   const cy = y1 + tt * dy;
   return Math.hypot(px - cx, py - cy);
+}
+
+function distanceEllipseCenterToPolyline(ellipse, poly) {
+  if (!poly.points.length) return Infinity;
+  const center = { x: ellipse.x, y: ellipse.y };
+  let min = Infinity;
+  for (let i = 0; i < poly.points.length - 1; i += 1) {
+    const a = poly.points[i];
+    const b = poly.points[i + 1];
+    const d = pointToSegmentDist(center.x, center.y, a.x, a.y, b.x, b.y);
+    if (d < min) min = d;
+  }
+  return min;
 }
 
 function ruleForKind(kind) {
@@ -302,13 +259,17 @@ function evaluateAndRender() {
     return;
   }
 
-  const fluePxDiameter = flue.r * 2;
+  const fluePxDiameter = flue.rx * 2;
   const pxPerMm = fluePxDiameter / FLUE_MM;
 
   const rows = [];
-  paintedObjects.forEach((obj) => {
-    if (obj.path.length < 2) return;
-    const distPx = distancePointToPath(flue, obj.path);
+  const polylines = [...paintedObjects];
+  if (activePolyline && activePolyline.points.length >= 2) {
+    polylines.push(activePolyline);
+  }
+
+  polylines.forEach((obj) => {
+    const distPx = distanceEllipseCenterToPolyline(flue, obj);
     const distMm = distPx / pxPerMm;
     const rule = ruleForKind(obj.kind);
     rows.push({
@@ -350,7 +311,7 @@ function drawScaled(ctx2d, img, canv) {
   return { s, ox, oy };
 }
 
-function mapToPreview(pt, img, canv, meta) {
+function mapToPreview(pt, meta) {
   return {
     x: meta.ox + pt.x * meta.s,
     y: meta.oy + pt.y * meta.s
@@ -365,32 +326,36 @@ function renderPreviews(pxPerMm) {
   const metaA = drawScaled(optACTX, bgImage, optACanvas);
   const metaB = drawScaled(optBCTX, bgImage, optBCanvas);
 
-  const req = 300;
   let closestMm = Infinity;
-  paintedObjects.forEach((obj) => {
-    if (obj.path.length < 2) return;
-    const dPx = distancePointToPath(flue, obj.path);
+  const polylines = [...paintedObjects];
+  if (activePolyline && activePolyline.points.length >= 2) {
+    polylines.push(activePolyline);
+  }
+  polylines.forEach((obj) => {
+    const dPx = distanceEllipseCenterToPolyline(flue, obj);
     const dMm = dPx / pxPerMm;
     if (dMm < closestMm) closestMm = dMm;
   });
-  if (closestMm === Infinity) closestMm = req;
-  const deficitMm = Math.max(0, req - closestMm);
+
+  const target = 300;
+  if (closestMm === Infinity) closestMm = target;
+  const deficitMm = Math.max(0, target - closestMm);
 
   const movePx = deficitMm * pxPerMm;
   const moved = { x: flue.x + movePx, y: flue.y };
 
-  const fluePrev = mapToPreview(flue, bgImage, optACanvas, metaA);
-  const movedPrev = mapToPreview(moved, bgImage, optACanvas, metaA);
-  const rPrev = flue.r * metaA.s;
+  const movedPrev = mapToPreview(moved, metaA);
+  const rXprev = flue.rx * metaA.s;
+  const rYprev = flue.ry * metaA.s;
 
   optACTX.strokeStyle = "red";
   optACTX.lineWidth = 2;
   optACTX.beginPath();
-  optACTX.arc(movedPrev.x, movedPrev.y, rPrev, 0, Math.PI * 2);
+  optACTX.ellipse(movedPrev.x, movedPrev.y, rXprev, rYprev, 0, 0, Math.PI * 2);
   optACTX.stroke();
 
-  const fluePrevB = mapToPreview(flue, bgImage, optBCanvas, metaB);
-  const movedPrevB = mapToPreview(moved, bgImage, optBCanvas, metaB);
+  const fluePrevB = mapToPreview(flue, metaB);
+  const movedPrevB = mapToPreview(moved, metaB);
   const plumeMmRaw = parseFloat(plumeMmInput.value);
   const plumeMm = Number.isFinite(plumeMmRaw) && plumeMmRaw > 0 ? plumeMmRaw : 60;
   const plumePx = plumeMm * pxPerMm * metaB.s;
@@ -398,7 +363,7 @@ function renderPreviews(pxPerMm) {
   optBCTX.strokeStyle = "blue";
   optBCTX.lineWidth = 2;
   optBCTX.beginPath();
-  optBCTX.arc(fluePrevB.x, fluePrevB.y, rPrev, 0, Math.PI * 2);
+  optBCTX.ellipse(fluePrevB.x, fluePrevB.y, flue.rx * metaB.s, flue.ry * metaB.s, 0, 0, Math.PI * 2);
   optBCTX.stroke();
 
   optBCTX.strokeStyle = "blue";
@@ -411,9 +376,115 @@ function renderPreviews(pxPerMm) {
 
   optBCTX.lineWidth = 2;
   optBCTX.beginPath();
-  optBCTX.arc(movedPrevB.x, movedPrevB.y, rPrev, 0, Math.PI * 2);
+  optBCTX.ellipse(movedPrevB.x, movedPrevB.y, flue.rx * metaB.s, flue.ry * metaB.s, 0, 0, Math.PI * 2);
   optBCTX.stroke();
 }
+
+canvas.addEventListener("pointerdown", (evt) => {
+  evt.preventDefault();
+  const pos = getCanvasPos(evt);
+
+  if (flue && hitFlueWidthHandle(pos)) {
+    draggingFlueW = true;
+    return;
+  }
+  if (flue && hitFlueHeightHandle(pos)) {
+    draggingFlueH = true;
+    return;
+  }
+  if (flue && hitFlueBody(pos)) {
+    draggingFlue = true;
+    return;
+  }
+
+  if (currentTool === "flue") {
+    flue = { x: pos.x, y: pos.y, rx: 60, ry: 60 };
+    evaluateAndRender();
+    return;
+  }
+
+  if (activePolyline && activePolyline.kind === currentTool) {
+    activePolyline.points.push(pos);
+  } else {
+    finalizeActivePolyline();
+    activePolyline = { kind: currentTool, points: [pos] };
+  }
+  evaluateAndRender();
+});
+
+canvas.addEventListener("pointermove", (evt) => {
+  const pos = getCanvasPos(evt);
+
+  if (draggingFlue && flue) {
+    flue.x = pos.x;
+    flue.y = pos.y;
+    evaluateAndRender();
+    return;
+  }
+  if (draggingFlueW && flue) {
+    flue.rx = Math.max(10, Math.abs(pos.x - flue.x));
+    evaluateAndRender();
+    return;
+  }
+  if (draggingFlueH && flue) {
+    flue.ry = Math.max(10, Math.abs(pos.y - flue.y));
+    evaluateAndRender();
+  }
+});
+
+function endPointerInteraction() {
+  draggingFlue = false;
+  draggingFlueW = false;
+  draggingFlueH = false;
+}
+
+canvas.addEventListener("pointerup", endPointerInteraction);
+canvas.addEventListener("pointercancel", endPointerInteraction);
+
+undoBtn.addEventListener("click", () => {
+  if (activePolyline) {
+    activePolyline = null;
+    evaluateAndRender();
+    return;
+  }
+  if (paintedObjects.length > 0) {
+    paintedObjects.pop();
+    evaluateAndRender();
+    return;
+  }
+  if (flue) {
+    flue = null;
+    evaluateAndRender();
+  }
+});
+
+bgUpload.addEventListener("change", (evt) => {
+  const file = evt.target.files?.[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    bgImage = img;
+    paintedObjects = [];
+    activePolyline = null;
+    flue = null;
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.style.width = `${img.width}px`;
+    canvas.style.height = `${img.height}px`;
+    draw();
+    evaluateAndRender();
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+manufacturerSelect.addEventListener("change", () => {
+  currentManufacturerKey = manufacturerSelect.value;
+  currentClearances = {
+    ...MANUFACTURER_RULES[currentManufacturerKey].clearances
+  };
+  renderClearances();
+  evaluateAndRender();
+});
 
 plumeMmInput.addEventListener("input", evaluateAndRender);
 
@@ -431,4 +502,4 @@ if (flueSizeBtns.length) {
 populateManufacturers();
 renderClearances();
 setToolFromButtons();
-draw();
+evaluateAndRender();
