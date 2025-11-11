@@ -1,6 +1,8 @@
 export default {
   async fetch(request, env, ctx) {
-    // CORS preflight
+    const url = new URL(request.url);
+
+    // --- CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -11,39 +13,27 @@ export default {
       });
     }
 
-    const url = new URL(request.url);
-
+    // --- handle POST to /analyse-flue-image or /
     if (
       request.method === "POST" &&
       (url.pathname === "/" || url.pathname === "/analyse-flue-image")
     ) {
       const body = await request.json().catch(() => ({}));
 
-      // TODO: call your real AI here
-
+      // 🔧 replace this with your real AI logic later
       const fake = {
         areas: [
           {
             type: "polygon",
-            label: "AI: window opening (300mm)",
+            label: "AI test box (fake detection)",
             rule: "window-opening",
             points: [
-              { x: 200, y: 150 },
-              { x: 360, y: 150 },
-              { x: 360, y: 280 },
-              { x: 200, y: 280 }
+              { x: 220, y: 160 },
+              { x: 360, y: 160 },
+              { x: 360, y: 260 },
+              { x: 220, y: 260 }
             ],
             confidence: 0.9
-          },
-          {
-            type: "line",
-            label: "AI: eaves (200mm)",
-            rule: "eaves",
-            points: [
-              { x: 80, y: 110 },
-              { x: 600, y: 110 }
-            ],
-            confidence: 0.85
           }
         ]
       };
@@ -57,18 +47,11 @@ export default {
       });
     }
 
-    if (request.method !== "POST") {
-      return new Response("Method not allowed", {
-        status: 405,
-        headers: {
-          "Access-Control-Allow-Origin": "*"
-        }
-      });
-    }
-
-    return new Response("Not found", {
+    // --- anything else → 404
+    return new Response(JSON.stringify({ error: "Unknown endpoint" }), {
       status: 404,
       headers: {
+        "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*"
       }
     });
