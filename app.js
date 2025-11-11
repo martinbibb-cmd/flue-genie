@@ -6,12 +6,12 @@ const manufacturerSelect = document.getElementById("manufacturerSelect");
 const clearanceFields = document.getElementById("clearanceFields");
 const resultsBody = document.querySelector("#resultsTable tbody");
 const bgUpload = document.getElementById("bgUpload");
-const flueMmInput = document.getElementById("flueMm");
 const plumeMmInput = document.getElementById("plumeMm");
 const optACanvas = document.getElementById("optA");
 const optACTX = optACanvas.getContext("2d");
 const optBCanvas = document.getElementById("optB");
 const optBCTX = optBCanvas.getContext("2d");
+const flueSizeBtns = document.querySelectorAll("#flueSizeBtns button");
 
 let currentManufacturerKey = "ideal";
 let currentClearances = {
@@ -20,6 +20,10 @@ let currentClearances = {
 
 let currentTool = "window";
 let bgImage = null;
+
+let FLUE_MM = 100;
+
+const FLUE_HANDLE_HALF = 14;
 
 let paintedObjects = []; // {kind, path:[{x,y},...]}
 
@@ -130,7 +134,12 @@ function draw() {
     ctx.strokeStyle = "red";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.rect(hx - 6, hy - 6, 12, 12);
+    ctx.rect(
+      hx - FLUE_HANDLE_HALF,
+      hy - FLUE_HANDLE_HALF,
+      FLUE_HANDLE_HALF * 2,
+      FLUE_HANDLE_HALF * 2
+    );
     ctx.fill();
     ctx.stroke();
   }
@@ -147,10 +156,10 @@ function onResizeHandle(pos) {
   const hx = flue.x + flue.r;
   const hy = flue.y;
   return (
-    pos.x >= hx - 10 &&
-    pos.x <= hx + 10 &&
-    pos.y >= hy - 10 &&
-    pos.y <= hy + 10
+    pos.x >= hx - FLUE_HANDLE_HALF &&
+    pos.x <= hx + FLUE_HANDLE_HALF &&
+    pos.y >= hy - FLUE_HANDLE_HALF &&
+    pos.y <= hy + FLUE_HANDLE_HALF
   );
 }
 
@@ -294,9 +303,7 @@ function evaluateAndRender() {
   }
 
   const fluePxDiameter = flue.r * 2;
-  const flueMmRaw = parseFloat(flueMmInput.value);
-  const flueMm = Number.isFinite(flueMmRaw) && flueMmRaw > 0 ? flueMmRaw : 100;
-  const pxPerMm = fluePxDiameter / flueMm;
+  const pxPerMm = fluePxDiameter / FLUE_MM;
 
   const rows = [];
   paintedObjects.forEach((obj) => {
@@ -408,8 +415,18 @@ function renderPreviews(pxPerMm) {
   optBCTX.stroke();
 }
 
-flueMmInput.addEventListener("input", evaluateAndRender);
 plumeMmInput.addEventListener("input", evaluateAndRender);
+
+if (flueSizeBtns.length) {
+  flueSizeBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      flueSizeBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      FLUE_MM = Number(btn.dataset.flueMm) || 100;
+      evaluateAndRender();
+    });
+  });
+}
 
 populateManufacturers();
 renderClearances();

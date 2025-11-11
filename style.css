@@ -27,7 +27,7 @@ main {
   max-width: none;
   touch-action: none; /* important for iOS */
 }
-#tools button {
+#tools button { 
   display: block;
   width: 100%;
   margin-bottom: 4px;
@@ -38,6 +38,19 @@ main {
 }
 #tools button.active {
   outline: 2px solid #0070f3;
+}
+#flueSizeBtns {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+}
+#flueSizeBtns button {
+  flex: 1;
+  padding: 6px 0;
+}
+#flueSizeBtns button.active {
+  background: #0070f3;
+  color: #fff;
 }
 .previews {
   display: flex;
