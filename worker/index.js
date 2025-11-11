@@ -1,8 +1,8 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
 
-    // --- CORS preflight
+    // CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -13,32 +13,17 @@ export default {
       });
     }
 
-    // --- handle POST to /analyse-flue-image or /
+    // Handle POST to / and /analyse-flue-image
     if (
       request.method === "POST" &&
       (url.pathname === "/" || url.pathname === "/analyse-flue-image")
     ) {
       const body = await request.json().catch(() => ({}));
 
-      // 🔧 replace this with your real AI logic later
-      const fake = {
-        areas: [
-          {
-            type: "polygon",
-            label: "AI test box (fake detection)",
-            rule: "window-opening",
-            points: [
-              { x: 220, y: 160 },
-              { x: 360, y: 160 },
-              { x: 360, y: 260 },
-              { x: 220, y: 260 }
-            ],
-            confidence: 0.9
-          }
-        ]
-      };
-
-      return new Response(JSON.stringify(fake), {
+      return new Response(JSON.stringify({
+        ok: true,
+        received: body
+      }), {
         status: 200,
         headers: {
           "Content-Type": "application/json",
@@ -47,7 +32,7 @@ export default {
       });
     }
 
-    // --- anything else → 404
+    // Fallback 404
     return new Response(JSON.stringify({ error: "Unknown endpoint" }), {
       status: 404,
       headers: {
