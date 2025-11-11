@@ -99,6 +99,41 @@ body {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
 }
 
+#assistControls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+#assistControls button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s, color 0.2s;
+}
+
+#assistControls button:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+#assistControls button.active {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #fff;
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
+#assistControls button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 #aiControls {
   display: flex;
   flex-direction: column;

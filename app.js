@@ -33,6 +33,12 @@ const aiPass2Btn = document.getElementById("aiPass2Btn");
 const aiStatusEl = document.getElementById("aiStatus");
 const aiList = document.getElementById("aiList");
 const legendEl = document.getElementById("legend");
+const autoDetectBtn = document.getElementById("autoDetectBtn");
+const roughBrushBtn = document.getElementById("roughBrushBtn");
+
+const ROUGH_BRUSH_IDLE_LABEL = roughBrushBtn
+  ? roughBrushBtn.textContent
+  : "Rough paint → AI clean";
 
 const AI_WORKER_ENDPOINT =
   (typeof window !== "undefined" && window.AI_WORKER_URL) ||
@@ -64,6 +70,9 @@ let aiOverlays = [];
 let safetyZones = [];
 let lastPxPerMm = null;
 let measurementResults = [];
+let roughBrushMode = false;
+let roughStrokes = [];
+let roughActivePointerId = null;
 
 function resetAIStatus() {
   if (!aiStatusEl) return;
@@ -83,6 +92,73 @@ function invalidateAIOverlays() {
   }
   renderLegend();
   resetAIStatus();
+}
+
+function setRoughBrushMode(enabled) {
+  roughBrushMode = enabled;
+  if (!roughBrushBtn) return;
+  roughBrushBtn.classList.toggle("active", enabled);
+  roughBrushBtn.textContent = enabled ? "Finish rough brush" : ROUGH_BRUSH_IDLE_LABEL;
+  if (!enabled) {
+    roughActivePointerId = null;
+  }
+}
+
+function normaliseAiPoints(points = []) {
+  if (!Array.isArray(points)) return [];
+  return points
+    .map(pt => ({
+      x: typeof pt.x === "number" ? pt.x : Number(pt.x),
+      y: typeof pt.y === "number" ? pt.y : Number(pt.y)
+    }))
+    .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+}
+
+function mapAiLabelToKind(label = "") {
+  const l = String(label || "").toLowerCase();
+  if (l.includes("fabric")) return "window-fabric";
+  if (l.includes("window")) return "window-opening";
+  if (l.includes("soffit") || l.includes("eaves")) return "eaves";
+  if (l.includes("gutter") || l.includes("pipe") || l.includes("downpipe")) return "gutter";
+  if (l.includes("boundary") || l.includes("facing")) return "boundary";
+  return null;
+}
+
+function applyAiAreasToPaintedObjects(areas, { replaceExisting = true, source = "ai" } = {}) {
+  if (!Array.isArray(areas) || areas.length === 0) {
+    return 0;
+  }
+
+  if (replaceExisting) {
+    for (let i = paintedObjects.length - 1; i >= 0; i--) {
+      if (paintedObjects[i] && paintedObjects[i]._source === source) {
+        paintedObjects.splice(i, 1);
+      }
+    }
+  }
+
+  if (replaceExisting) {
+    if (activeShape && activeShape._source === source) {
+      activeShape = null;
+    }
+    draggingCorner = null;
+  }
+
+  let added = 0;
+  areas.forEach(area => {
+    const kind = mapAiLabelToKind(area?.label || area?.zone);
+    if (!kind) return;
+    const points = normaliseAiPoints(area?.points);
+    if (!points || points.length === 0) return;
+    paintedObjects.push({
+      kind,
+      points,
+      _source: source
+    });
+    added += 1;
+  });
+
+  return added;
 }
 
 // flue is ELLIPSE
@@ -138,6 +214,11 @@ if (initialToolBtn) {
 
 // undo
 undoBtn.addEventListener("click", () => {
+  if (roughStrokes.length > 0) {
+    roughStrokes.pop();
+    draw();
+    return;
+  }
   if (activeShape) {
     const idx = paintedObjects.indexOf(activeShape);
     if (idx !== -1) {
@@ -170,6 +251,25 @@ if (aiPass1Btn) {
 if (aiPass2Btn) {
   aiPass2Btn.addEventListener("click", () => {
     runAI({ includeMarks: true, button: aiPass2Btn });
+  });
+}
+
+if (autoDetectBtn) {
+  autoDetectBtn.addEventListener("click", () => {
+    runAutoDetect();
+  });
+}
+
+if (roughBrushBtn) {
+  roughBrushBtn.addEventListener("click", async () => {
+    if (!roughBrushMode) {
+      roughStrokes = [];
+      setRoughBrushMode(true);
+      setAIStatus("Rough brush mode enabled – scribble over the objects, then tap again to clean.");
+      draw();
+      return;
+    }
+    await runRoughBrushCleanup();
   });
 }
 
@@ -238,6 +338,22 @@ function draw() {
     ctx.arc(zone.cx, zone.cy, zone.r, 0, Math.PI * 2);
     ctx.fill();
   });
+
+  if (roughStrokes.length > 0) {
+    ctx.strokeStyle = "rgba(37,99,235,0.7)";
+    ctx.lineWidth = 24;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(roughStrokes[0].x, roughStrokes[0].y);
+    for (let i = 1; i < roughStrokes.length; i++) {
+      ctx.lineTo(roughStrokes[i].x, roughStrokes[i].y);
+    }
+    if (roughStrokes.length === 1) {
+      ctx.lineTo(roughStrokes[0].x + 0.01, roughStrokes[0].y + 0.01);
+    }
+    ctx.stroke();
+  }
 
   paintedObjects.forEach(shape => {
     const pts = shape.points;
@@ -542,6 +658,14 @@ canvas.addEventListener("pointerdown", evt => {
 
   const pos = getCanvasPos(evt);
 
+  if (roughBrushMode) {
+    evt.preventDefault();
+    roughActivePointerId = evt.pointerId;
+    roughStrokes.push(pos);
+    draw();
+    return;
+  }
+
   if (flue) {
     const halfHandle = HANDLE_SIZE / 2;
     if (
@@ -659,6 +783,12 @@ canvas.addEventListener("pointermove", evt => {
   }
 
   const pos = getCanvasPos(evt);
+  if (roughBrushMode && roughActivePointerId === evt.pointerId) {
+    evt.preventDefault();
+    roughStrokes.push(pos);
+    draw();
+    return;
+  }
   if (draggingFlue && flue) {
     evt.preventDefault();
     flue.x = pos.x;
@@ -695,6 +825,9 @@ canvas.addEventListener("pointerup", evt => {
     lastPinchDist = null;
     lastPinchMid = null;
   }
+  if (roughActivePointerId === evt.pointerId) {
+    roughActivePointerId = null;
+  }
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
@@ -706,6 +839,9 @@ canvas.addEventListener("pointercancel", evt => {
   if (activePointers.size < 2) {
     lastPinchDist = null;
     lastPinchMid = null;
+  }
+  if (roughActivePointerId === evt.pointerId) {
+    roughActivePointerId = null;
   }
   draggingFlue = false;
   draggingFlueW = false;
@@ -943,49 +1079,22 @@ function mapToPreview(pt, meta) {
     y: meta.oy + pt.y * meta.s
   };
 }
-function isPositionClear(x, y, pxPerMm) {
-  for (const shape of paintedObjects) {
-    if (!shape.points || shape.points.length < 2) continue;
-    let minPx = Infinity;
-    for (let i = 0; i < shape.points.length; i++) {
-      const a = shape.points[i];
-      const b = shape.points[(i + 1) % shape.points.length];
-      const d = pointToSegmentDist(x, y, a.x, a.y, b.x, b.y);
-      if (d < minPx) minPx = d;
-    }
-    const rule = ruleForKind(shape.kind);
-    const mm = minPx / pxPerMm;
-    if (mm < rule.mm) {
-      return false;
-    }
-  }
-  return true;
-}
-function findFirstClearX(startX, y, pxPerMm) {
-  const maxSearchPx = canvas.width;
-  const stepPx = 5;
-
-  for (let offset = stepPx; offset < maxSearchPx; offset += stepPx) {
-    const candidateX = startX + offset;
-    if (isPositionClear(candidateX, y, pxPerMm)) {
-      return candidateX;
-    }
-  }
-  return null;
-}
-
 function renderPreviews(pxPerMm) {
   optACTX.clearRect(0,0,optACanvas.width,optACanvas.height);
   optBCTX.clearRect(0,0,optBCanvas.width,optBCanvas.height);
   if (!bgImage || !flue) return;
 
-  const targetX = findFirstClearX(flue.x, flue.y, pxPerMm);
+  let currentMinMm = getGlobalMinMm(flue.x, flue.y, pxPerMm);
+  if (!Number.isFinite(currentMinMm)) {
+    currentMinMm = 0;
+  }
+  const candidate = findBetterX(flue.x, flue.y, pxPerMm, currentMinMm);
 
   const metaA = drawScaled(optACTX, bgImage, optACanvas);
   const metaB = drawScaled(optBCTX, bgImage, optBCanvas);
 
-  if (targetX !== null) {
-    const movedPrev = mapToPreview({ x: targetX, y: flue.y }, metaA);
+  if (candidate) {
+    const movedPrev = mapToPreview({ x: candidate.x, y: candidate.y }, metaA);
     optACTX.strokeStyle = "red";
     optACTX.lineWidth = 2;
     optACTX.beginPath();
@@ -994,15 +1103,14 @@ function renderPreviews(pxPerMm) {
   } else {
     optACTX.fillStyle = "#c00";
     optACTX.font = "14px sans-serif";
-    optACTX.fillText("No clear position found on this line.", 10, 20);
+    optACTX.fillText("No safe move found.", 10, 20);
   }
 
-  if (targetX !== null) {
+  if (candidate) {
     const fluePrevB = mapToPreview({ x: flue.x, y: flue.y }, metaB);
-    const movedPrevB = mapToPreview({ x: targetX, y: flue.y }, metaB);
+    const movedPrevB = mapToPreview({ x: candidate.x, y: candidate.y }, metaB);
 
-    const plumeMm = DEFAULT_PLUME_MM;
-    const plumePx = plumeMm * pxPerMm * metaB.s;
+    const plumePx = DEFAULT_PLUME_MM * pxPerMm * metaB.s;
 
     optBCTX.strokeStyle = "blue";
     optBCTX.lineWidth = 2;
@@ -1025,7 +1133,156 @@ function renderPreviews(pxPerMm) {
   } else {
     optBCTX.fillStyle = "#c00";
     optBCTX.font = "14px sans-serif";
-    optBCTX.fillText("No safe horizontal plume route.", 10, 20);
+    optBCTX.fillText("No safe plume route.", 10, 20);
+  }
+}
+
+function getGlobalMinMm(x, y, pxPerMm) {
+  let minMm = Infinity;
+  paintedObjects.forEach(shape => {
+    if (!shape.points || shape.points.length < 2) return;
+    let minPx = Infinity;
+    for (let i = 0; i < shape.points.length; i++) {
+      const a = shape.points[i];
+      const b = shape.points[(i + 1) % shape.points.length];
+      const d = pointToSegmentDist(x, y, a.x, a.y, b.x, b.y);
+      if (d < minPx) minPx = d;
+    }
+    const mm = minPx / pxPerMm;
+    if (mm < minMm) minMm = mm;
+  });
+  return minMm;
+}
+
+function findBetterX(startX, y, pxPerMm, currentMinMm) {
+  const maxSearchPx = canvas.width;
+  const stepPx = 5;
+  for (let offset = stepPx; offset < maxSearchPx; offset += stepPx) {
+    const candX = startX + offset;
+    const candMinMm = getGlobalMinMm(candX, y, pxPerMm);
+    if (candMinMm > currentMinMm && positionSatisfiesAll(candX, y, pxPerMm)) {
+      return { x: candX, y };
+    }
+  }
+  return null;
+}
+
+function positionSatisfiesAll(x, y, pxPerMm) {
+  for (const shape of paintedObjects) {
+    if (!shape.points || shape.points.length < 2) continue;
+    let minPx = Infinity;
+    for (let i = 0; i < shape.points.length; i++) {
+      const a = shape.points[i];
+      const b = shape.points[(i + 1) % shape.points.length];
+      const d = pointToSegmentDist(x, y, a.x, a.y, b.x, b.y);
+      if (d < minPx) minPx = d;
+    }
+    const rule = ruleForKind(shape.kind);
+    const mm = minPx / pxPerMm;
+    if (mm < rule.mm) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function runAutoDetect() {
+  if (!bgImage) {
+    setAIStatus("Upload a wall photo before auto-detecting objects.", { isError: true });
+    return;
+  }
+
+  roughStrokes = [];
+  setRoughBrushMode(false);
+  draw();
+
+  const payload = buildAIPayload({ includeMarks: false });
+  payload.mode = "detect-only";
+
+  if (autoDetectBtn) {
+    autoDetectBtn.disabled = true;
+  }
+  setAIStatus("Auto-detecting objects…");
+
+  try {
+    const result = await analyseImageWithAI(payload);
+    const added = applyAiAreasToPaintedObjects(result?.areas, {
+      replaceExisting: true,
+      source: "ai-detect"
+    });
+    invalidateAIOverlays();
+    evaluateAndRender();
+    if (added > 0) {
+      setAIStatus(`AI detected ${added} object${added === 1 ? "" : "s"}.`);
+    } else {
+      setAIStatus("AI didn't detect any objects automatically.");
+    }
+  } catch (err) {
+    console.error("Auto-detect failed", err);
+    const message = err && err.message ? err.message : "Auto-detect failed.";
+    setAIStatus(message, { isError: true });
+  } finally {
+    if (autoDetectBtn) {
+      autoDetectBtn.disabled = false;
+    }
+  }
+}
+
+async function runRoughBrushCleanup() {
+  if (!bgImage) {
+    setRoughBrushMode(false);
+    roughStrokes = [];
+    draw();
+    setAIStatus("Upload a wall photo before cleaning rough brush marks.", { isError: true });
+    return;
+  }
+
+  if (roughStrokes.length < 2) {
+    setRoughBrushMode(false);
+    roughStrokes = [];
+    draw();
+    setAIStatus("Draw over the objects before asking AI to clean the rough brush.", { isError: true });
+    return;
+  }
+
+  if (roughBrushBtn) {
+    roughBrushBtn.disabled = true;
+  }
+
+  setAIStatus("Cleaning rough brush with AI…");
+
+  try {
+    const payload = buildAIPayload({ includeMarks: false });
+    payload.mode = "rough-clean";
+    payload.rough = roughStrokes.map(pt => ({ x: pt.x, y: pt.y }));
+
+    const result = await analyseImageWithAI(payload);
+    const added = applyAiAreasToPaintedObjects(result?.areas, {
+      replaceExisting: true,
+      source: "ai-rough"
+    });
+
+    roughStrokes = [];
+    setRoughBrushMode(false);
+    invalidateAIOverlays();
+    evaluateAndRender();
+
+    if (added > 0) {
+      setAIStatus(`AI cleaned ${added} object${added === 1 ? "" : "s"} from your brush strokes.`);
+    } else {
+      setAIStatus("AI couldn't interpret those brush strokes.", { isError: true });
+    }
+  } catch (err) {
+    console.error("Rough brush cleanup failed", err);
+    setRoughBrushMode(false);
+    roughStrokes = [];
+    const message = err && err.message ? err.message : "Rough brush clean failed.";
+    setAIStatus(message, { isError: true });
+  } finally {
+    if (roughBrushBtn) {
+      roughBrushBtn.disabled = false;
+    }
+    draw();
   }
 }
 
@@ -1057,6 +1314,9 @@ function buildAIPayload({ includeMarks = true } = {}) {
     payload.measurements = [];
   }
 
+  if (roughStrokes.length > 0) {
+    payload.rough = roughStrokes.map(pt => ({ x: pt.x, y: pt.y }));
+  }
   if (lastPxPerMm && isFinite(lastPxPerMm)) {
     payload.scale = lastPxPerMm * 100; // px per 100mm
   }
