@@ -6,13 +6,21 @@ const MANUFACTURERS = [
   { value: "viessmann", label: "Viessmann (BS 5440 set)" }
 ];
 
+const FAN_RULES = {
+  "window-opening": { label: "Window opening", mm: 300 },
+  "window-fabric": { label: "Window fabric", mm: 150 },
+  gutter: { label: "Gutter / pipe", mm: 75 },
+  eaves: { label: "Eaves / soffit", mm: 200 },
+  boundary: { label: "Facing surface", mm: 600 }
+};
+
 const RULE_SETS = {
   fan: {
-    windowOpening: 300,
-    windowFabric: 150,
-    eaves: 200,
-    gutter: 75,
-    boundary: 600
+    windowOpening: FAN_RULES["window-opening"].mm,
+    windowFabric: FAN_RULES["window-fabric"].mm,
+    eaves: FAN_RULES.eaves.mm,
+    gutter: FAN_RULES.gutter.mm,
+    boundary: FAN_RULES.boundary.mm
   }
 };
 
@@ -223,10 +231,10 @@ function buildOverlaysFromUserMarks() {
       const rule = ruleForKind(shape.kind);
       return {
         type: "polygon",
-        label: rule.label,
+        label: `From user: ${rule.label}`,
         zone: "no-go",
         points: shape.points.map(pt => ({ x: pt.x, y: pt.y })),
-        confidence: 0.5
+        confidence: 0
       };
     })
     .filter(Boolean);
@@ -306,6 +314,15 @@ function getSelectedFlueSizeMm() {
   }
 
   return FLUE_MM;
+}
+
+function getPxPerMm() {
+  if (!flue) return null;
+  const fluePxDiameter = flue.rx * 2;
+  const flueSizeMm = getSelectedFlueSizeMm();
+  if (!Number.isFinite(fluePxDiameter) || fluePxDiameter <= 0) return null;
+  if (!Number.isFinite(flueSizeMm) || flueSizeMm <= 0) return null;
+  return fluePxDiameter / flueSizeMm;
 }
 
 function getFlueRadiusPx() {
@@ -473,6 +490,10 @@ function draw() {
     ctx.beginPath();
     ctx.arc(zone.cx, zone.cy, zone.r, 0, Math.PI * 2);
     ctx.fill();
+
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(zone.label, zone.cx + 6, zone.cy + 16);
   });
 
   if (roughStrokes.length > 0) {
@@ -742,9 +763,9 @@ function renderSuggestions() {
   sorted.forEach(result => {
     const li = document.createElement("li");
     if (result.pass) {
-      li.textContent = `${formatObjectLabel(result.kind)} OK – ${result.actual}mm clear ≥ ${result.required}mm required.`;
+      li.textContent = `${result.label} OK – ${result.actual}mm clear ≥ ${result.required}mm required.`;
     } else {
-      li.textContent = `${formatObjectLabel(result.kind)}: move to ≥${result.required}mm clear (currently ${result.actual}mm clear).`;
+      li.textContent = `${result.label}: move to ≥${result.required}mm clear (currently ${result.actual}mm clear).`;
     }
     aiList.appendChild(li);
   });
@@ -1051,20 +1072,10 @@ function forEachShapeSegment(points, callback) {
 }
 
 function ruleForKind(kind) {
-  switch (kind) {
-    case "window-opening":
-      return { label: "window opening edge clearance", mm: currentRules.windowOpening };
-    case "window-fabric":
-      return { label: "window fabric edge clearance", mm: currentRules.windowFabric };
-    case "gutter":
-      return { label: "gutter/pipe edge clearance", mm: currentRules.gutter };
-    case "eaves":
-      return { label: "eaves / soffit edge clearance", mm: currentRules.eaves };
-    case "boundary":
-      return { label: "facing surface/boundary edge clearance", mm: currentRules.boundary };
-    default:
-      return { label: "opening edge clearance", mm: currentRules.windowOpening };
+  if (FAN_RULES[kind]) {
+    return FAN_RULES[kind];
   }
+  return { label: "Opening", mm: FAN_RULES["window-opening"].mm };
 }
 
 function formatObjectLabel(kind) {
@@ -1086,19 +1097,23 @@ function evaluateAndRender() {
     lastPxPerMm = null;
     const emptyRow = document.createElement("tr");
     emptyRow.className = "empty";
-    emptyRow.innerHTML = '<td colspan="6">Add a flue and marks to see clearances.</td>';
+    emptyRow.innerHTML = '<td colspan="5">Add a flue and marks to see clearances.</td>';
     resultsBody.appendChild(emptyRow);
     draw();
     renderSuggestions();
     return;
   }
 
-  const fluePxDiameter = flue.rx * 2;
-  const flueSizeMm = getSelectedFlueSizeMm();
-  const pxPerMm = flueSizeMm > 0 ? fluePxDiameter / flueSizeMm : 0;
+  const pxPerMm = getPxPerMm();
+  if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) {
+    draw();
+    renderSuggestions();
+    return;
+  }
   const flueRadiusPx = getFlueRadiusPx();
-  const flueRadiusMm = pxPerMm > 0 ? flueRadiusPx / pxPerMm : 0;
   lastPxPerMm = pxPerMm;
+
+  let rowIndex = 1;
 
   paintedObjects.forEach(shape => {
     const pts = shape.points;
@@ -1125,11 +1140,9 @@ function evaluateAndRender() {
     }
 
     const edgePx = Math.max(0, minPx - flueRadiusPx);
-    const centreMm = pxPerMm > 0 ? minPx / pxPerMm : 0;
-    const distMm = pxPerMm > 0 ? edgePx / pxPerMm : 0;
+    const distMm = edgePx / pxPerMm;
     const actualRounded = Math.round(distMm);
-    const centreRounded = Math.round(centreMm);
-    const requiredCentreMm = rule.mm + flueRadiusMm;
+    const pass = distMm >= rule.mm;
     const evaluation = {
       shape,
       kind: shape.kind,
@@ -1137,11 +1150,7 @@ function evaluateAndRender() {
       required: rule.mm,
       actual: actualRounded,
       actualMm: distMm,
-      centreMm,
-      centreRounded,
-      requiredCentreMm,
-      requiredCentreRounded: Math.round(requiredCentreMm),
-      pass: distMm >= rule.mm,
+      pass,
       closestPoint
     };
 
@@ -1153,39 +1162,37 @@ function evaluateAndRender() {
       cx: flue.x,
       cy: flue.y,
       r: rule.mm * pxPerMm,
-      color: evaluation.pass ? "rgba(0,200,0,0.06)" : "rgba(255,0,0,0.13)",
-      label: `${rule.label} ${evaluation.pass ? "PASS" : "FAIL"}`
+      color: pass ? "rgba(0,200,0,0.05)" : "rgba(255,0,0,0.12)",
+      label: `${rule.label} (${rule.mm}mm)`
     });
+    const tr = document.createElement("tr");
+    tr.className = pass ? "pass-row" : "fail-row";
+    tr.innerHTML = `
+      <td>${rowIndex}</td>
+      <td>${rule.label}</td>
+      <td>${rule.mm}</td>
+      <td>${actualRounded}</td>
+      <td class="status ${pass ? "pass" : "fail"}">${pass ? "✔" : "✖"}</td>
+    `;
+    resultsBody.appendChild(tr);
+
+    if (closestPoint) {
+      distanceAnnotations.push({
+        x: closestPoint.x,
+        y: closestPoint.y,
+        text: `#${rowIndex}: ${actualRounded}mm / ${rule.mm}mm`,
+        color: pass ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.95)"
+      });
+    }
+
+    rowIndex += 1;
   });
 
   if (measurementResults.length === 0) {
     const emptyRow = document.createElement("tr");
     emptyRow.className = "empty";
-    emptyRow.innerHTML = '<td colspan="6">Mark nearby objects to measure clearances.</td>';
+    emptyRow.innerHTML = '<td colspan="5">Mark nearby objects to measure clearances.</td>';
     resultsBody.appendChild(emptyRow);
-  } else {
-    measurementResults.forEach((result, index) => {
-      if (result.closestPoint) {
-        distanceAnnotations.push({
-          x: result.closestPoint.x,
-          y: result.closestPoint.y,
-          text: `#${index + 1}: ${result.actual}mm clear / ${result.required}mm req`,
-          color: result.pass ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.95)"
-        });
-      }
-
-      const tr = document.createElement("tr");
-      tr.className = result.pass ? "pass-row" : "fail-row";
-      tr.innerHTML = `
-        <td>${index + 1}</td>
-        <td>${formatObjectLabel(result.kind)}</td>
-        <td>${result.label}</td>
-        <td>${result.required}</td>
-        <td>${result.actual}mm clear / ${result.centreRounded}mm centre</td>
-        <td class="status ${result.pass ? "pass" : "fail"}">${result.pass ? "✔" : "✖"}</td>
-      `;
-      resultsBody.appendChild(tr);
-    });
   }
 
   draw();
@@ -1196,9 +1203,8 @@ function evaluateAndRender() {
 
 function hasLocalFailures() {
   if (!flue) return false;
-  const fluePxDiameter = flue.rx * 2;
-  const flueSizeMm = getSelectedFlueSizeMm();
-  const pxPerMm = flueSizeMm > 0 ? fluePxDiameter / flueSizeMm : 0;
+  const pxPerMm = getPxPerMm();
+  if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) return false;
   const flueRadiusPx = getFlueRadiusPx();
   for (const shape of paintedObjects) {
     if (!shape.points || shape.points.length < 2) continue;
@@ -1618,9 +1624,7 @@ function buildAiPayload({ includeMarks = true } = {}) {
   };
 
   if (flue) {
-    const fluePxDiameter = flue.rx * 2;
     const flueSizeMm = getSelectedFlueSizeMm();
-    const pxPerMm = flueSizeMm > 0 ? fluePxDiameter / flueSizeMm : 0;
     payload.flue = {
       x: flue.x,
       y: flue.y,
@@ -1639,9 +1643,8 @@ function buildAiPayload({ includeMarks = true } = {}) {
     payload.measurements = (measurementResults || []).map(res => ({
       kind: res.kind,
       requiredMm: res.required,
-      actualMm: res.actual,
-      actualCentreMm: res.centreMm,
-      requiredCentreMm: res.requiredCentreMm
+      actualMm: res.actualMm,
+      pass: !!res.pass
     }));
   } else {
     payload.shapes = [];
@@ -1694,14 +1697,14 @@ async function runAI({ includeMarks = true, button } = {}) {
     areas = filterAiAreas(areas, canvas, ctx);
 
     if (result && result.error) {
-      setAIStatus(`AI error: ${JSON.stringify(result.error)}`, { isError: true });
+      setAIStatus("AI error from worker – showing your marks only.", { isError: true });
       aiOverlays = buildOverlaysFromUserMarks();
     } else if (areas.length === 0) {
-      setAIStatus("AI returned nothing, using your marks.");
+      setAIStatus("AI didn’t detect objects – using your marks.");
       aiOverlays = buildOverlaysFromUserMarks();
     } else {
       aiOverlays = normaliseAIResult({ areas });
-      const message = `AI highlighted ${aiOverlays.length} area${aiOverlays.length === 1 ? "" : "s"}. Move flue or plume as indicated.`;
+      const message = `AI detected ${aiOverlays.length} object${aiOverlays.length === 1 ? "" : "s"}.`;
       setAIStatus(message);
     }
 
@@ -1709,8 +1712,7 @@ async function runAI({ includeMarks = true, button } = {}) {
     draw();
   } catch (err) {
     console.error("AI analysis failed", err);
-    const message = err && err.message ? err.message : "AI analysis failed.";
-    setAIStatus(`AI error: ${message}`, { isError: true });
+    setAIStatus("AI error from worker – showing your marks only.", { isError: true });
     aiOverlays = buildOverlaysFromUserMarks();
     renderLegendFromAI(aiOverlays);
     draw();
