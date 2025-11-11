@@ -76,6 +76,7 @@ const downloadOptABtn = document.getElementById("downloadOptABtn");
 const downloadOptBBtn = document.getElementById("downloadOptBBtn");
 const aiHighlightBtn = document.getElementById("aiHighlightBtn");
 const aiStatusEl = document.getElementById("aiStatus");
+const aiList = document.getElementById("aiList");
 
 const AI_WORKER_ENDPOINT =
   (typeof window !== "undefined" && window.AI_WORKER_URL) ||
@@ -261,6 +262,20 @@ if (aiHighlightBtn) {
     try {
       const result = await analyseImageWithAI(payload);
       aiOverlays = normaliseAIResult(result);
+
+      if (aiList) {
+        aiList.innerHTML = "";
+        aiOverlays.forEach((a, i) => {
+          const li = document.createElement("li");
+          const confText =
+            typeof a.confidence === "number"
+              ? ` (${Math.round(a.confidence * 100)}%)`
+              : "";
+          li.textContent = `${i + 1}. ${a.label || "Area"}${confText}`;
+          aiList.appendChild(li);
+        });
+      }
+
       draw();
       if (aiOverlays.length === 0) {
         if (hasLocalFailures()) {
@@ -276,6 +291,9 @@ if (aiHighlightBtn) {
       console.error("AI analysis failed", err);
       const message = err && err.message ? err.message : "AI analysis failed.";
       setAIStatus(message, { isError: true });
+      if (aiList) {
+        aiList.innerHTML = "";
+      }
     } finally {
       aiHighlightBtn.disabled = false;
       aiHighlightBtn.textContent = defaultText;
@@ -446,99 +464,77 @@ function colourForKind(kind) {
 function drawAIOverlays() {
   if (!aiOverlays || aiOverlays.length === 0) return;
 
-  ctx.save();
   aiOverlays.forEach(area => {
     if (!area) return;
-    const basePoints = Array.isArray(area.points) ? area.points : [];
-    if (basePoints.length === 0) return;
 
-    const points = basePoints.map(pt => ({
-      x: typeof pt.x === "number" ? pt.x : Number(pt.x) || 0,
-      y: typeof pt.y === "number" ? pt.y : Number(pt.y) || 0
-    }));
+    const points = Array.isArray(area.points)
+      ? area.points
+          .map(pt => ({
+            x: typeof pt.x === "number" ? pt.x : Number(pt.x) || 0,
+            y: typeof pt.y === "number" ? pt.y : Number(pt.y) || 0
+          }))
+          .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))
+      : [];
+
+    const areaWithPoints = { ...area, points };
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,0,0,0.8)";
+    ctx.lineWidth = 3;
 
     let labelPoint = null;
-    const strokeColour = "rgba(255, 99, 71, 0.9)";
-    const fillColour = "rgba(255, 99, 71, 0.15)";
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
-    ctx.strokeStyle = strokeColour;
-    ctx.setLineDash([8, 6]);
 
-    if (area.type === "line" || (points.length === 2 && area.type !== "polygon")) {
+    if (
+      areaWithPoints.type === "polygon" &&
+      Array.isArray(areaWithPoints.points) &&
+      areaWithPoints.points.length
+    ) {
       ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].x, points[i].y);
+      ctx.moveTo(areaWithPoints.points[0].x, areaWithPoints.points[0].y);
+      for (let i = 1; i < areaWithPoints.points.length; i++) {
+        ctx.lineTo(areaWithPoints.points[i].x, areaWithPoints.points[i].y);
       }
+      ctx.closePath();
       ctx.stroke();
-      const last = points[points.length - 1];
+      labelPoint = areaWithPoints.points[0];
+    } else if (
+      areaWithPoints.type === "line" &&
+      Array.isArray(areaWithPoints.points) &&
+      areaWithPoints.points.length >= 2
+    ) {
+      ctx.beginPath();
+      ctx.moveTo(areaWithPoints.points[0].x, areaWithPoints.points[0].y);
+      ctx.lineTo(areaWithPoints.points[1].x, areaWithPoints.points[1].y);
+      ctx.stroke();
       labelPoint = {
-        x: (points[0].x + last.x) / 2,
-        y: (points[0].y + last.y) / 2
+        x: (areaWithPoints.points[0].x + areaWithPoints.points[1].x) / 2,
+        y: (areaWithPoints.points[0].y + areaWithPoints.points[1].y) / 2
       };
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].x, points[i].y);
-      }
-      if (points.length > 2) {
-        ctx.closePath();
-      }
-      if (points.length >= 3) {
-        ctx.fillStyle = fillColour;
-        ctx.fill();
-      }
-      ctx.stroke();
-      labelPoint = getPolygonCentroid(points);
     }
 
-    ctx.setLineDash([]);
-    const labelText = formatOverlayLabel(area);
-    if (labelText) {
-      drawOverlayLabel(labelPoint, labelText);
+    if (labelPoint) {
+      const conf =
+        typeof areaWithPoints.confidence === "number"
+          ? ` (${Math.round(areaWithPoints.confidence * 100)}%)`
+          : "";
+      const txt = areaWithPoints.label
+        ? areaWithPoints.label + conf
+        : "AI area" + conf;
+
+      ctx.font = "12px sans-serif";
+      const textWidth = ctx.measureText(txt).width;
+      const pad = 4;
+      const x = labelPoint.x + 6;
+      const y = labelPoint.y - 16;
+
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
+      ctx.fillRect(x, y, textWidth + pad * 2, 16);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(txt, x + pad, y + 12);
     }
+
+    ctx.restore();
   });
-  ctx.restore();
-}
-
-function getPolygonCentroid(points) {
-  if (!points || points.length === 0) return { x: 0, y: 0 };
-  let sumX = 0;
-  let sumY = 0;
-  points.forEach(pt => {
-    sumX += pt.x;
-    sumY += pt.y;
-  });
-  return {
-    x: sumX / points.length,
-    y: sumY / points.length
-  };
-}
-
-function formatOverlayLabel(area) {
-  const base = area.label || area.rule || area.type;
-  if (!base) return "";
-  if (typeof area.confidence === "number" && isFinite(area.confidence)) {
-    const pct = Math.round(area.confidence * 100);
-    return `${base} (${pct}%)`;
-  }
-  return base;
-}
-
-function drawOverlayLabel(point, text) {
-  if (!point || !isFinite(point.x) || !isFinite(point.y) || !text) return;
-  ctx.save();
-  ctx.font = "12px sans-serif";
-  const width = ctx.measureText ? ctx.measureText(text).width : text.length * 6;
-  const boxX = point.x + 4;
-  const boxY = point.y - 16;
-  ctx.fillStyle = "rgba(0,0,0,0.75)";
-  ctx.fillRect(boxX, boxY, width + 10, 18);
-  ctx.fillStyle = "#fff";
-  ctx.fillText(text, boxX + 5, boxY + 13);
-  ctx.restore();
 }
 
 // ==== POINTER EVENTS ====
