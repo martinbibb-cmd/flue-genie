@@ -53,7 +53,7 @@ let currentRules = { ...RULE_SETS.fan };
 let currentTool = "window-fabric";
 let bgImage = null;
 
-const HANDLE_SIZE = 14;
+const HANDLE_SIZE = 16;
 const CORNER_SIZE = 18;
 // painted objects are shapes: {kind, points:[{x,y}, ...]}
 let paintedObjects = [];
@@ -208,27 +208,6 @@ function getCanvasPos(evt) {
   return { x, y };
 }
 
-// ==== HITS FOR ELLIPSE ====
-function hitFlueBody(pos) {
-  if (!flue) return false;
-  const dx = pos.x - flue.x;
-  const dy = pos.y - flue.y;
-  const v = (dx*dx) / (flue.rx*flue.rx) + (dy*dy) / (flue.ry*flue.ry);
-  return v <= 1;
-}
-function hitFlueWidthHandle(pos) {
-  if (!flue) return false;
-  const hx = flue.x + flue.rx;
-  const hy = flue.y;
-  return Math.abs(pos.x - hx) <= HANDLE_SIZE && Math.abs(pos.y - hy) <= HANDLE_SIZE;
-}
-function hitFlueHeightHandle(pos) {
-  if (!flue) return false;
-  const hx = flue.x;
-  const hy = flue.y + flue.ry;
-  return Math.abs(pos.x - hx) <= HANDLE_SIZE && Math.abs(pos.y - hy) <= HANDLE_SIZE;
-}
-
 function hitCorner(pos, points) {
   if (!points) return -1;
   const half = CORNER_SIZE / 2;
@@ -252,16 +231,13 @@ function draw() {
     ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
   }
 
-  if (safetyZones.length > 0) {
-    safetyZones.forEach(zone => {
-      if (zone.type === "circle") {
-        ctx.fillStyle = zone.color;
-        ctx.beginPath();
-        ctx.arc(zone.cx, zone.cy, zone.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    });
-  }
+  safetyZones.forEach(zone => {
+    if (zone.type !== "circle") return;
+    ctx.fillStyle = zone.color;
+    ctx.beginPath();
+    ctx.arc(zone.cx, zone.cy, zone.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
 
   paintedObjects.forEach(shape => {
     const pts = shape.points;
@@ -306,18 +282,6 @@ function draw() {
     });
   });
 
-  if (flue && measurementResults.length > 0) {
-    measurementResults.forEach(result => {
-      if (!result.closestPoint) return;
-      ctx.strokeStyle = result.pass ? "rgba(34,197,94,0.6)" : "rgba(239,68,68,0.75)";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(flue.x, flue.y);
-      ctx.lineTo(result.closestPoint.x, result.closestPoint.y);
-      ctx.stroke();
-    });
-  }
-
   if (flue) {
     ctx.strokeStyle = "red";
     ctx.lineWidth = 2;
@@ -325,8 +289,21 @@ function draw() {
     ctx.ellipse(flue.x, flue.y, flue.rx, flue.ry, 0, 0, Math.PI * 2);
     ctx.stroke();
 
+    if (measurementResults.length > 0) {
+      measurementResults.forEach(result => {
+        if (!result.closestPoint) return;
+        ctx.strokeStyle = result.pass ? "rgba(34,197,94,0.6)" : "rgba(239,68,68,0.75)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(flue.x, flue.y);
+        ctx.lineTo(result.closestPoint.x, result.closestPoint.y);
+        ctx.stroke();
+      });
+    }
+
     ctx.fillStyle = "white";
     ctx.strokeStyle = "red";
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.rect(flue.x + flue.rx - HANDLE_SIZE / 2, flue.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
     ctx.fill();
@@ -338,7 +315,64 @@ function draw() {
     ctx.stroke();
   }
 
-  drawAIOverlays();
+  aiOverlays.forEach((area, idx) => {
+    if (!area) return;
+
+    const points = Array.isArray(area.points)
+      ? area.points
+          .map(pt => ({
+            x: typeof pt.x === "number" ? pt.x : Number(pt.x) || 0,
+            y: typeof pt.y === "number" ? pt.y : Number(pt.y) || 0
+          }))
+          .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))
+      : [];
+
+    const stroke = area.zone === "safe"
+      ? "rgba(0,180,0,0.8)"
+      : area.zone === "plume"
+        ? "rgba(0,120,255,0.8)"
+        : "rgba(255,0,0,0.8)";
+
+    ctx.save();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 3;
+
+    let anchor = null;
+
+    if (area.type === "polygon" && points.length) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      anchor = points[0];
+    } else if (area.type === "line" && points.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      ctx.lineTo(points[1].x, points[1].y);
+      ctx.stroke();
+      anchor = {
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2
+      };
+    }
+
+    if (anchor) {
+      const labelText = `${idx + 1}. ${area.label || area.zone || "AI area"}`;
+      ctx.font = "12px sans-serif";
+      const textWidth = ctx.measureText(labelText).width + 8;
+      const x = anchor.x + 6;
+      const y = anchor.y - 16;
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
+      ctx.fillRect(x, y, textWidth, 16);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(labelText, x + 4, y + 12);
+    }
+
+    ctx.restore();
+  });
 
   distanceAnnotations.forEach(a => {
     ctx.font = "12px sans-serif";
@@ -487,85 +521,6 @@ function getRemedyMessage() {
   return "All clearances satisfied for fan-assisted flue.";
 }
 
-function drawAIOverlays() {
-  if (!aiOverlays || aiOverlays.length === 0) return;
-
-  aiOverlays.forEach((area, index) => {
-    if (!area) return;
-
-    const points = Array.isArray(area.points)
-      ? area.points
-          .map(pt => ({
-            x: typeof pt.x === "number" ? pt.x : Number(pt.x) || 0,
-            y: typeof pt.y === "number" ? pt.y : Number(pt.y) || 0
-          }))
-          .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))
-      : [];
-
-    const areaWithPoints = { ...area, points };
-    const palette = colourForZone(areaWithPoints.zone);
-
-    ctx.save();
-    ctx.strokeStyle = palette.stroke;
-    ctx.lineWidth = 3;
-
-    let labelPoint = null;
-
-    if (
-      areaWithPoints.type === "polygon" &&
-      Array.isArray(areaWithPoints.points) &&
-      areaWithPoints.points.length
-    ) {
-      ctx.beginPath();
-      ctx.moveTo(areaWithPoints.points[0].x, areaWithPoints.points[0].y);
-      for (let i = 1; i < areaWithPoints.points.length; i++) {
-        ctx.lineTo(areaWithPoints.points[i].x, areaWithPoints.points[i].y);
-      }
-      ctx.closePath();
-      ctx.fillStyle = palette.fill;
-      ctx.fill();
-      ctx.stroke();
-      const centroid = areaWithPoints.points.reduce(
-        (acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }),
-        { x: 0, y: 0 }
-      );
-      labelPoint = {
-        x: centroid.x / areaWithPoints.points.length,
-        y: centroid.y / areaWithPoints.points.length
-      };
-    } else if (
-      areaWithPoints.type === "line" &&
-      Array.isArray(areaWithPoints.points) &&
-      areaWithPoints.points.length >= 2
-    ) {
-      ctx.beginPath();
-      ctx.moveTo(areaWithPoints.points[0].x, areaWithPoints.points[0].y);
-      ctx.lineTo(areaWithPoints.points[1].x, areaWithPoints.points[1].y);
-      ctx.stroke();
-      labelPoint = {
-        x: (areaWithPoints.points[0].x + areaWithPoints.points[1].x) / 2,
-        y: (areaWithPoints.points[0].y + areaWithPoints.points[1].y) / 2
-      };
-    }
-
-    if (labelPoint) {
-      ctx.fillStyle = palette.stroke;
-      ctx.beginPath();
-      ctx.arc(labelPoint.x, labelPoint.y, 14, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${index + 1}`, labelPoint.x, labelPoint.y);
-      ctx.textAlign = "start";
-      ctx.textBaseline = "alphabetic";
-    }
-
-    ctx.restore();
-  });
-}
-
 // ==== POINTER EVENTS ====
 canvas.addEventListener("pointerdown", evt => {
   const rect = canvas.getBoundingClientRect();
@@ -587,6 +542,40 @@ canvas.addEventListener("pointerdown", evt => {
 
   const pos = getCanvasPos(evt);
 
+  if (flue) {
+    const halfHandle = HANDLE_SIZE / 2;
+    if (
+      pos.x >= flue.x + flue.rx - halfHandle &&
+      pos.x <= flue.x + flue.rx + halfHandle &&
+      pos.y >= flue.y - halfHandle &&
+      pos.y <= flue.y + halfHandle
+    ) {
+      evt.preventDefault();
+      draggingFlueW = true;
+      return;
+    }
+
+    if (
+      pos.x >= flue.x - halfHandle &&
+      pos.x <= flue.x + halfHandle &&
+      pos.y >= flue.y + flue.ry - halfHandle &&
+      pos.y <= flue.y + flue.ry + halfHandle
+    ) {
+      evt.preventDefault();
+      draggingFlueH = true;
+      return;
+    }
+
+    const dx = pos.x - flue.x;
+    const dy = pos.y - flue.y;
+    const norm = (dx * dx) / (flue.rx * flue.rx) + (dy * dy) / (flue.ry * flue.ry);
+    if (norm <= 1) {
+      evt.preventDefault();
+      draggingFlue = true;
+      return;
+    }
+  }
+
   // try to grab an existing corner first
   for (let i = paintedObjects.length - 1; i >= 0; i--) {
     const shape = paintedObjects[i];
@@ -596,23 +585,6 @@ canvas.addEventListener("pointerdown", evt => {
       draggingCorner = { shapeIndex: i, pointIndex: cornerIndex };
       return;
     }
-  }
-
-  // try flue first
-  if (flue && hitFlueWidthHandle(pos)) {
-    evt.preventDefault();
-    draggingFlueW = true;
-    return;
-  }
-  if (flue && hitFlueHeightHandle(pos)) {
-    evt.preventDefault();
-    draggingFlueH = true;
-    return;
-  }
-  if (flue && hitFlueBody(pos)) {
-    evt.preventDefault();
-    draggingFlue = true;
-    return;
   }
 
   // placing new flue
@@ -687,15 +659,6 @@ canvas.addEventListener("pointermove", evt => {
   }
 
   const pos = getCanvasPos(evt);
-  if (draggingCorner) {
-    evt.preventDefault();
-    const shape = paintedObjects[draggingCorner.shapeIndex];
-    if (shape && shape.points && shape.points[draggingCorner.pointIndex]) {
-      shape.points[draggingCorner.pointIndex] = pos;
-      evaluateAndRender();
-    }
-    return;
-  }
   if (draggingFlue && flue) {
     evt.preventDefault();
     flue.x = pos.x;
@@ -705,14 +668,23 @@ canvas.addEventListener("pointermove", evt => {
   }
   if (draggingFlueW && flue) {
     evt.preventDefault();
-    flue.rx = Math.max(10, Math.abs(pos.x - flue.x));
+    flue.rx = Math.max(20, Math.abs(pos.x - flue.x));
     evaluateAndRender();
     return;
   }
   if (draggingFlueH && flue) {
     evt.preventDefault();
-    flue.ry = Math.max(10, Math.abs(pos.y - flue.y));
+    flue.ry = Math.max(20, Math.abs(pos.y - flue.y));
     evaluateAndRender();
+    return;
+  }
+  if (draggingCorner) {
+    evt.preventDefault();
+    const shape = paintedObjects[draggingCorner.shapeIndex];
+    if (shape && shape.points && shape.points[draggingCorner.pointIndex]) {
+      shape.points[draggingCorner.pointIndex] = pos;
+      evaluateAndRender();
+    }
     return;
   }
 });
@@ -830,7 +802,6 @@ function formatObjectLabel(kind) {
 function evaluateAndRender() {
   if (!resultsBody) return;
   resultsBody.innerHTML = "";
-  invalidateAIOverlays();
   measurementResults = [];
   distanceAnnotations = [];
   safetyZones = [];
@@ -895,7 +866,7 @@ function evaluateAndRender() {
       cx: flue.x,
       cy: flue.y,
       r: rule.mm * pxPerMm,
-      color: evaluation.pass ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.2)",
+      color: evaluation.pass ? "rgba(0,200,0,0.06)" : "rgba(255,0,0,0.13)",
       label: `${rule.label} ${evaluation.pass ? "PASS" : "FAIL"}`
     });
   });
