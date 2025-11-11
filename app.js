@@ -363,8 +363,12 @@ canvas.addEventListener("pointerdown", evt => {
 
   // placing new flue
   if (currentTool === "flue") {
-    flue = { x: pos.x, y: pos.y, rx: 60, ry: 60 };
-    evaluateAndRender();
+    // if we already HAVE a flue, do nothing here
+    // (you can move it by grabbing the middle, or resize by handles)
+    if (!flue) {
+      flue = { x: pos.x, y: pos.y, rx: 60, ry: 60 };
+      evaluateAndRender();
+    }
     return;
   }
 
