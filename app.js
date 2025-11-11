@@ -27,6 +27,10 @@ const optACanvas = document.getElementById("optA");
 const optACTX = optACanvas.getContext("2d");
 const optBCanvas = document.getElementById("optB");
 const optBCTX = optBCanvas.getContext("2d");
+const optCCanvas = document.getElementById("optC");
+const optCCTX = optCCanvas.getContext("2d");
+const optDCanvas = document.getElementById("optD");
+const optDCTX = optDCanvas.getContext("2d");
 const boilerTypeSelect = document.getElementById("boilerType");
 const aiPass1Btn = document.getElementById("aiPass1Btn");
 const aiPass2Btn = document.getElementById("aiPass2Btn");
@@ -1079,9 +1083,36 @@ function mapToPreview(pt, meta) {
     y: meta.oy + pt.y * meta.s
   };
 }
+
+function findVerticalObstructionBetween(x0, y0) {
+  for (const shape of paintedObjects) {
+    if (shape.kind !== "gutter") continue;
+    if (!shape.points || shape.points.length < 2) continue;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    shape.points.forEach(p => {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    });
+
+    const w = maxX - minX;
+    const h = maxY - minY;
+    if (h > w * 2 && minX > x0 && y0 >= minY && y0 <= maxY) {
+      return { minX, maxX, minY, maxY };
+    }
+  }
+  return null;
+}
 function renderPreviews(pxPerMm) {
   optACTX.clearRect(0,0,optACanvas.width,optACanvas.height);
   optBCTX.clearRect(0,0,optBCanvas.width,optBCanvas.height);
+  optCCTX.clearRect(0,0,optCCanvas.width,optCCanvas.height);
+  optDCTX.clearRect(0,0,optDCanvas.width,optDCanvas.height);
   if (!bgImage || !flue) return;
 
   let currentMinMm = getGlobalMinMm(flue.x, flue.y, pxPerMm);
@@ -1089,6 +1120,8 @@ function renderPreviews(pxPerMm) {
     currentMinMm = 0;
   }
   const candidate = findBetterX(flue.x, flue.y, pxPerMm, currentMinMm);
+  const obstruction = findVerticalObstructionBetween(flue.x, flue.y);
+  const hasScale = Number.isFinite(pxPerMm) && pxPerMm > 0;
 
   const metaA = drawScaled(optACTX, bgImage, optACanvas);
   const metaB = drawScaled(optBCTX, bgImage, optBCanvas);
@@ -1135,8 +1168,137 @@ function renderPreviews(pxPerMm) {
     optBCTX.font = "14px sans-serif";
     optBCTX.fillText("No safe plume route.", 10, 20);
   }
-}
 
+  if (obstruction) {
+    if (hasScale) {
+      const metaC = drawScaled(optCCTX, bgImage, optCCanvas);
+      const fluePrevC = mapToPreview({ x: flue.x, y: flue.y }, metaC);
+
+      optCCTX.strokeStyle = "black";
+      optCCTX.lineWidth = 2;
+      optCCTX.beginPath();
+      optCCTX.ellipse(fluePrevC.x, fluePrevC.y, flue.rx*metaC.s, flue.ry*metaC.s, 0, 0, Math.PI*2);
+      optCCTX.stroke();
+
+      const horizontalClearMm = 150;
+      const extensionTargetX = obstruction.maxX + horizontalClearMm * pxPerMm;
+      const extensionEndPrev = mapToPreview({ x: extensionTargetX, y: flue.y }, metaC);
+
+      optCCTX.strokeStyle = "orange";
+      optCCTX.lineWidth = 10;
+      optCCTX.lineCap = "round";
+      optCCTX.beginPath();
+      optCCTX.moveTo(fluePrevC.x, fluePrevC.y);
+      optCCTX.lineTo(extensionEndPrev.x, extensionEndPrev.y);
+      optCCTX.stroke();
+
+      const plumeLenPx = 80;
+      const plumeEndC = { x: extensionEndPrev.x + plumeLenPx, y: extensionEndPrev.y };
+
+      optCCTX.strokeStyle = "blue";
+      optCCTX.lineWidth = 12;
+      optCCTX.lineCap = "round";
+      optCCTX.beginPath();
+      optCCTX.moveTo(extensionEndPrev.x, extensionEndPrev.y);
+      optCCTX.lineTo(plumeEndC.x, plumeEndC.y);
+      optCCTX.stroke();
+
+      optCCTX.lineWidth = 2;
+      optCCTX.strokeStyle = "black";
+      optCCTX.beginPath();
+      optCCTX.ellipse(plumeEndC.x, plumeEndC.y, flue.rx*metaC.s, flue.ry*metaC.s, 0, 0, Math.PI*2);
+      optCCTX.stroke();
+
+      optCCTX.fillStyle = "#000";
+      optCCTX.font = "12px sans-serif";
+      optCCTX.fillText("Extend past pipe, then plume", 10, 20);
+    } else {
+      optCCTX.fillStyle = "#999";
+      optCCTX.font = "12px sans-serif";
+      optCCTX.fillText("Size the flue to preview extensions.", 10, 20);
+    }
+  } else {
+    optCCTX.fillStyle = "#999";
+    optCCTX.font = "12px sans-serif";
+    optCCTX.fillText("No obstruction → extension not needed.", 10, 20);
+  }
+
+  if (obstruction) {
+    if (hasScale) {
+      const riseMm = 300;
+      const risePxWorld = riseMm * pxPerMm;
+      const neckTopWorldY = flue.y - risePxWorld;
+      const clearanceMarginPx = 10;
+      const hasVerticalClearance = neckTopWorldY < obstruction.minY - clearanceMarginPx;
+
+      if (hasVerticalClearance) {
+        const metaD = drawScaled(optDCTX, bgImage, optDCanvas);
+        const fluePrevD = mapToPreview({ x: flue.x, y: flue.y }, metaD);
+
+        optDCTX.strokeStyle = "black";
+        optDCTX.lineWidth = 2;
+        optDCTX.beginPath();
+        optDCTX.ellipse(fluePrevD.x, fluePrevD.y, flue.rx*metaD.s, flue.ry*metaD.s, 0, 0, Math.PI*2);
+        optDCTX.stroke();
+
+        const risePx = riseMm * pxPerMm * metaD.s;
+        const neckTop = { x: fluePrevD.x, y: fluePrevD.y - risePx };
+
+        optDCTX.strokeStyle = "orange";
+        optDCTX.lineWidth = 10;
+        optDCTX.lineCap = "round";
+        optDCTX.beginPath();
+        optDCTX.moveTo(fluePrevD.x, fluePrevD.y);
+        optDCTX.lineTo(neckTop.x, neckTop.y);
+        optDCTX.stroke();
+
+        const horizontalClearMm = 150;
+        const horizPx = horizontalClearMm * pxPerMm * metaD.s;
+        const neckEnd = { x: neckTop.x + horizPx, y: neckTop.y };
+
+        optDCTX.strokeStyle = "orange";
+        optDCTX.lineWidth = 10;
+        optDCTX.lineCap = "round";
+        optDCTX.beginPath();
+        optDCTX.moveTo(neckTop.x, neckTop.y);
+        optDCTX.lineTo(neckEnd.x, neckEnd.y);
+        optDCTX.stroke();
+
+        const plumeLenPx = 80;
+        const plumeEnd = { x: neckEnd.x + plumeLenPx, y: neckEnd.y };
+
+        optDCTX.strokeStyle = "blue";
+        optDCTX.lineWidth = 12;
+        optDCTX.lineCap = "round";
+        optDCTX.beginPath();
+        optDCTX.moveTo(neckEnd.x, neckEnd.y);
+        optDCTX.lineTo(plumeEnd.x, plumeEnd.y);
+        optDCTX.stroke();
+
+        optDCTX.lineWidth = 2;
+        optDCTX.beginPath();
+        optDCTX.ellipse(plumeEnd.x, plumeEnd.y, flue.rx*metaD.s, flue.ry*metaD.s, 0, 0, Math.PI*2);
+        optDCTX.stroke();
+
+        optDCTX.fillStyle = "#000";
+        optDCTX.font = "12px sans-serif";
+        optDCTX.fillText("Swan neck above pipe, then plume", 10, 20);
+      } else {
+        optDCTX.fillStyle = "#999";
+        optDCTX.font = "12px sans-serif";
+        optDCTX.fillText("Obstruction too tall for swan neck.", 10, 20);
+      }
+    } else {
+      optDCTX.fillStyle = "#999";
+      optDCTX.font = "12px sans-serif";
+      optDCTX.fillText("Size the flue to preview swan neck.", 10, 20);
+    }
+  } else {
+    optDCTX.fillStyle = "#999";
+    optDCTX.font = "12px sans-serif";
+    optDCTX.fillText("No vertical obstruction → swan neck not needed.", 10, 20);
+  }
+}
 function getGlobalMinMm(x, y, pxPerMm) {
   let minMm = Infinity;
   paintedObjects.forEach(shape => {
