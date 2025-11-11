@@ -74,6 +74,12 @@ const optBCTX = optBCanvas.getContext("2d");
 const downloadMarkedBtn = document.getElementById("downloadMarkedBtn");
 const downloadOptABtn = document.getElementById("downloadOptABtn");
 const downloadOptBBtn = document.getElementById("downloadOptBBtn");
+const aiHighlightBtn = document.getElementById("aiHighlightBtn");
+const aiStatusEl = document.getElementById("aiStatus");
+
+const AI_WORKER_ENDPOINT =
+  (typeof window !== "undefined" && window.AI_WORKER_URL) ||
+  "https://your-worker.yourname.workers.dev/analyse-flue-image";
 
 // view / camera
 let viewScale = 1;
@@ -97,6 +103,27 @@ let paintedObjects = [];
 let activeShape = null;
 let draggingCorner = null;
 let distanceAnnotations = [];
+let aiOverlays = [];
+let lastPxPerMm = null;
+
+function resetAIStatus() {
+  if (!aiStatusEl) return;
+  aiStatusEl.textContent = "";
+  aiStatusEl.classList.remove("error");
+}
+
+function setAIStatus(message, { isError = false } = {}) {
+  if (!aiStatusEl) return;
+  aiStatusEl.textContent = message || "";
+  aiStatusEl.classList.toggle("error", !!message && isError);
+}
+
+function invalidateAIOverlays() {
+  if (aiOverlays.length > 0) {
+    aiOverlays = [];
+  }
+  resetAIStatus();
+}
 
 // flue is ELLIPSE
 // { x, y, rx, ry }
@@ -167,6 +194,7 @@ undoBtn.addEventListener("click", () => {
       paintedObjects.splice(idx, 1);
     }
     activeShape = null;
+    invalidateAIOverlays();
     draw();
     return;
   }
@@ -178,6 +206,7 @@ undoBtn.addEventListener("click", () => {
   if (flue) {
     flue = null;
     resultsBody.innerHTML = "";
+    invalidateAIOverlays();
     draw();
   }
 });
@@ -212,6 +241,44 @@ downloadMarkedBtn.addEventListener("click", () => downloadCanvas(canvas, "flue-m
 downloadOptABtn.addEventListener("click", () => downloadCanvas(optACanvas, "flue-option-a.png"));
 downloadOptBBtn.addEventListener("click", () => downloadCanvas(optBCanvas, "flue-option-b.png"));
 
+if (aiHighlightBtn) {
+  const defaultText = aiHighlightBtn.textContent;
+  aiHighlightBtn.addEventListener("click", async () => {
+    if (!bgImage) {
+      setAIStatus("Upload a background photo before running the AI.", { isError: true });
+      return;
+    }
+    if (!flue) {
+      setAIStatus("Place the flue ellipse before running the AI.", { isError: true });
+      return;
+    }
+
+    const payload = buildAIPayload();
+    setAIStatus("Analysing image with AI...");
+    aiHighlightBtn.disabled = true;
+    aiHighlightBtn.textContent = "Analysing...";
+
+    try {
+      const result = await analyseImageWithAI(payload);
+      aiOverlays = normaliseAIResult(result);
+      draw();
+      if (aiOverlays.length === 0) {
+        setAIStatus("AI didn't find any concerns.");
+      } else {
+        const plural = aiOverlays.length === 1 ? "area" : "areas";
+        setAIStatus(`AI highlighted ${aiOverlays.length} ${plural}.`);
+      }
+    } catch (err) {
+      console.error("AI analysis failed", err);
+      const message = err && err.message ? err.message : "AI analysis failed.";
+      setAIStatus(message, { isError: true });
+    } finally {
+      aiHighlightBtn.disabled = false;
+      aiHighlightBtn.textContent = defaultText;
+    }
+  });
+}
+
 // manufacturer change
 manufacturerSelect.addEventListener("change", () => {
   currentManufacturerKey = manufacturerSelect.value;
@@ -227,6 +294,7 @@ bgUpload.addEventListener("change", e => {
   const img = new Image();
   img.onload = () => {
     bgImage = img;
+    invalidateAIOverlays();
     canvas.width = img.width;
     canvas.height = img.height;
     canvas.style.width = img.width + "px";
@@ -323,6 +391,8 @@ function draw() {
     });
   });
 
+  drawAIOverlays();
+
   // flue ellipse
   if (flue) {
     ctx.strokeStyle = "red";
@@ -368,6 +438,104 @@ function colourForKind(kind) {
     case "boundary": return "#2d3436";
     default: return "#ff6b81";
   }
+}
+
+function drawAIOverlays() {
+  if (!aiOverlays || aiOverlays.length === 0) return;
+
+  ctx.save();
+  aiOverlays.forEach(area => {
+    if (!area) return;
+    const basePoints = Array.isArray(area.points) ? area.points : [];
+    if (basePoints.length === 0) return;
+
+    const points = basePoints.map(pt => ({
+      x: typeof pt.x === "number" ? pt.x : Number(pt.x) || 0,
+      y: typeof pt.y === "number" ? pt.y : Number(pt.y) || 0
+    }));
+
+    let labelPoint = null;
+    const strokeColour = "rgba(255, 99, 71, 0.9)";
+    const fillColour = "rgba(255, 99, 71, 0.15)";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = strokeColour;
+    ctx.setLineDash([8, 6]);
+
+    if (area.type === "line" || (points.length === 2 && area.type !== "polygon")) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.stroke();
+      const last = points[points.length - 1];
+      labelPoint = {
+        x: (points[0].x + last.x) / 2,
+        y: (points[0].y + last.y) / 2
+      };
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      if (points.length > 2) {
+        ctx.closePath();
+      }
+      if (points.length >= 3) {
+        ctx.fillStyle = fillColour;
+        ctx.fill();
+      }
+      ctx.stroke();
+      labelPoint = getPolygonCentroid(points);
+    }
+
+    ctx.setLineDash([]);
+    const labelText = formatOverlayLabel(area);
+    if (labelText) {
+      drawOverlayLabel(labelPoint, labelText);
+    }
+  });
+  ctx.restore();
+}
+
+function getPolygonCentroid(points) {
+  if (!points || points.length === 0) return { x: 0, y: 0 };
+  let sumX = 0;
+  let sumY = 0;
+  points.forEach(pt => {
+    sumX += pt.x;
+    sumY += pt.y;
+  });
+  return {
+    x: sumX / points.length,
+    y: sumY / points.length
+  };
+}
+
+function formatOverlayLabel(area) {
+  const base = area.label || area.rule || area.type;
+  if (!base) return "";
+  if (typeof area.confidence === "number" && isFinite(area.confidence)) {
+    const pct = Math.round(area.confidence * 100);
+    return `${base} (${pct}%)`;
+  }
+  return base;
+}
+
+function drawOverlayLabel(point, text) {
+  if (!point || !isFinite(point.x) || !isFinite(point.y) || !text) return;
+  ctx.save();
+  ctx.font = "12px sans-serif";
+  const width = ctx.measureText ? ctx.measureText(text).width : text.length * 6;
+  const boxX = point.x + 4;
+  const boxY = point.y - 16;
+  ctx.fillStyle = "rgba(0,0,0,0.75)";
+  ctx.fillRect(boxX, boxY, width + 10, 18);
+  ctx.fillStyle = "#fff";
+  ctx.fillText(text, boxX + 5, boxY + 13);
+  ctx.restore();
 }
 
 // ==== POINTER EVENTS ====
@@ -437,6 +605,7 @@ canvas.addEventListener("pointerdown", evt => {
     evt.preventDefault();
     activeShape = { kind: currentTool, points: [pos] };
     paintedObjects.push(activeShape);
+    invalidateAIOverlays();
     draw();
     return;
   }
@@ -629,8 +798,10 @@ function ruleForKind(kind) {
 
 function evaluateAndRender() {
   resultsBody.innerHTML = "";
+  invalidateAIOverlays();
   if (!flue) {
     distanceAnnotations = [];
+    lastPxPerMm = null;
     draw();
     return;
   }
@@ -638,6 +809,7 @@ function evaluateAndRender() {
   // scale: use horizontal diameter = 100mm
   const fluePxDiameter = flue.rx * 2;
   const pxPerMm = fluePxDiameter / FLUE_MM;
+  lastPxPerMm = pxPerMm;
 
   const rows = [];
   distanceAnnotations = [];
@@ -780,6 +952,80 @@ function renderPreviews(pxPerMm) {
   optBCTX.beginPath();
   optBCTX.ellipse(movedPrevB.x, movedPrevB.y, flue.rx*metaB.s, flue.ry*metaB.s, 0, 0, Math.PI*2);
   optBCTX.stroke();
+}
+
+function buildAIPayload() {
+  const shapes = paintedObjects.map(shape => ({
+    kind: shape.kind,
+    points: (shape.points || []).map(pt => ({ x: pt.x, y: pt.y }))
+  }));
+
+  const payload = {
+    image: canvas.toDataURL("image/png"),
+    flue: flue ? { x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry } : null,
+    shapes,
+    manufacturer: currentManufacturerKey,
+    clearances: { ...currentClearances },
+    plumeMm: parseFloat(plumeMmInput.value) || undefined
+  };
+
+  if (lastPxPerMm && isFinite(lastPxPerMm)) {
+    payload.scale = lastPxPerMm * 100; // px per 100mm
+  }
+  if (!payload.flue) {
+    delete payload.flue;
+  }
+  if (payload.plumeMm === undefined) {
+    delete payload.plumeMm;
+  }
+
+  return payload;
+}
+
+function normaliseAIResult(result) {
+  if (!result || typeof result !== "object") return [];
+  const areas = Array.isArray(result.areas) ? result.areas : [];
+  return areas
+    .map(area => {
+      const points = Array.isArray(area.points)
+        ? area.points
+            .map(pt => ({
+              x: typeof pt.x === "number" ? pt.x : Number(pt.x),
+              y: typeof pt.y === "number" ? pt.y : Number(pt.y)
+            }))
+            .filter(pt => isFinite(pt.x) && isFinite(pt.y))
+        : [];
+
+      return {
+        type: area.type || (points.length <= 2 ? "line" : "polygon"),
+        label: area.label,
+        rule: area.rule,
+        confidence: typeof area.confidence === "number" ? area.confidence : undefined,
+        points
+      };
+    })
+    .filter(area => area.points.length > 0);
+}
+
+async function analyseImageWithAI(payload) {
+  const res = await fetch(AI_WORKER_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    let errorText = "";
+    try {
+      errorText = await res.text();
+    } catch (_) {
+      // ignore
+    }
+    const statusText = errorText ? `${res.status}: ${errorText}` : `${res.status}`;
+    throw new Error(`AI analysis failed: ${statusText}`);
+  }
+
+  return res.json();
 }
 
 // initial draw
