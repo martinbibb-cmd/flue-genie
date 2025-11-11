@@ -11,49 +11,64 @@ export default {
       });
     }
 
-    if (request.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+    const url = new URL(request.url);
+
+    if (
+      request.method === "POST" &&
+      (url.pathname === "/" || url.pathname === "/analyse-flue-image")
+    ) {
+      const body = await request.json().catch(() => ({}));
+
+      // TODO: call your real AI here
+
+      const fake = {
+        areas: [
+          {
+            type: "polygon",
+            label: "AI: window opening (300mm)",
+            rule: "window-opening",
+            points: [
+              { x: 200, y: 150 },
+              { x: 360, y: 150 },
+              { x: 360, y: 280 },
+              { x: 200, y: 280 }
+            ],
+            confidence: 0.9
+          },
+          {
+            type: "line",
+            label: "AI: eaves (200mm)",
+            rule: "eaves",
+            points: [
+              { x: 80, y: 110 },
+              { x: 600, y: 110 }
+            ],
+            confidence: 0.85
+          }
+        ]
+      };
+
+      return new Response(JSON.stringify(fake), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
     }
 
-    const body = await request.json();
-
-    // body.image -> dataURL (can be large)
-    // body.flue -> {x,y,rx,ry}
-    // body.shapes -> user-marked shapes
-    // body.scale -> px per 100mm (optional)
-
-    // For now, return a pretend window and eaves line so frontend can draw:
-    const fake = {
-      areas: [
-        {
-          type: "polygon",
-          label: "AI: window opening (300mm)",
-          rule: "window-opening",
-          points: [
-            { x: 200, y: 150 },
-            { x: 360, y: 150 },
-            { x: 360, y: 280 },
-            { x: 200, y: 280 }
-          ],
-          confidence: 0.9
-        },
-        {
-          type: "line",
-          label: "AI: eaves (200mm)",
-          rule: "eaves",
-          points: [
-            { x: 80, y: 110 },
-            { x: 600, y: 110 }
-          ],
-          confidence: 0.85
+    if (request.method !== "POST") {
+      return new Response("Method not allowed", {
+        status: 405,
+        headers: {
+          "Access-Control-Allow-Origin": "*"
         }
-      ]
-    };
+      });
+    }
 
-    return new Response(JSON.stringify(fake), {
-      status: 200,
+    return new Response("Not found", {
+      status: 404,
       headers: {
-        "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*"
       }
     });
