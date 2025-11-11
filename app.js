@@ -1,7 +1,49 @@
-// ==== BASIC DATA (same rules for all makes for now) ====
+// ==== BASIC DATA (all the usual suspects) ====
 const MANUFACTURER_RULES = {
+  worcester: {
+    label: "Worcester",
+    clearances: {
+      toOpening: 300,
+      belowEaves: 200,
+      belowGutter: 75,
+      reducedWithExtension: 25,
+      toFacingSurface: 600,
+      toBoundary: 300,
+      terminalFacingTerminal: 1200,
+      verticalOnSameWall: 1500,
+      toOppositeOpening: 2000
+    }
+  },
+  vaillant: {
+    label: "Vaillant / ecoTEC",
+    clearances: {
+      toOpening: 300,
+      belowEaves: 200,
+      belowGutter: 75,
+      reducedWithExtension: 25,
+      toFacingSurface: 600,
+      toBoundary: 300,
+      terminalFacingTerminal: 1200,
+      verticalOnSameWall: 1500,
+      toOppositeOpening: 2000
+    }
+  },
   ideal: {
-    label: "Ideal / common",
+    label: "Ideal Logic+",
+    clearances: {
+      toOpening: 300,
+      belowEaves: 200,
+      belowGutter: 75,
+      reducedWithExtension: 25,
+      toFacingSurface: 600,
+      toBoundary: 300,
+      terminalFacingTerminal: 1200,
+      verticalOnSameWall: 1500,
+      toOppositeOpening: 2000
+    }
+  },
+  viessmann: {
+    label: "Viessmann (BS 5440 set)",
     clearances: {
       toOpening: 300,
       belowEaves: 200,
@@ -14,7 +56,6 @@ const MANUFACTURER_RULES = {
       toOppositeOpening: 2000
     }
   }
-  // add worcester / vaillant / viessmann here if you like
 };
 
 // ==== DOM ====
@@ -37,7 +78,7 @@ const downloadOptBBtn = document.getElementById("downloadOptBBtn");
 canvas.style.touchAction = "none"; // for iOS
 
 // ==== STATE ====
-let currentManufacturerKey = "ideal";
+let currentManufacturerKey = "worcester";
 let currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
 let currentTool = "window";
 let bgImage = null;
