@@ -62,21 +62,19 @@ const MANUFACTURER_RULES = {
 const canvas = document.getElementById("sceneCanvas");
 const ctx = canvas.getContext("2d");
 const manufacturerSelect = document.getElementById("manufacturerSelect");
-const clearanceFields = document.getElementById("clearanceFields");
 const resultsBody = document.querySelector("#resultsTable tbody");
 const bgUpload = document.getElementById("bgUpload");
-const plumeMmInput = document.getElementById("plumeMm");
 const undoBtn = document.getElementById("undoBtn");
 const optACanvas = document.getElementById("optA");
 const optACTX = optACanvas.getContext("2d");
 const optBCanvas = document.getElementById("optB");
 const optBCTX = optBCanvas.getContext("2d");
-const downloadMarkedBtn = document.getElementById("downloadMarkedBtn");
-const downloadOptABtn = document.getElementById("downloadOptABtn");
-const downloadOptBBtn = document.getElementById("downloadOptBBtn");
-const aiHighlightBtn = document.getElementById("aiHighlightBtn");
+const boilerTypeSelect = document.getElementById("boilerType");
+const aiPass1Btn = document.getElementById("aiPass1Btn");
+const aiPass2Btn = document.getElementById("aiPass2Btn");
 const aiStatusEl = document.getElementById("aiStatus");
 const aiList = document.getElementById("aiList");
+const legendEl = document.getElementById("legend");
 
 const AI_WORKER_ENDPOINT =
   (typeof window !== "undefined" && window.AI_WORKER_URL) ||
@@ -106,6 +104,7 @@ let draggingCorner = null;
 let distanceAnnotations = [];
 let aiOverlays = [];
 let lastPxPerMm = null;
+let measurementResults = [];
 
 function resetAIStatus() {
   if (!aiStatusEl) return;
@@ -123,6 +122,7 @@ function invalidateAIOverlays() {
   if (aiOverlays.length > 0) {
     aiOverlays = [];
   }
+  renderLegend();
   resetAIStatus();
 }
 
@@ -133,6 +133,15 @@ let draggingFlue = false;
 let draggingFlueW = false;
 let draggingFlueH = false;
 const FLUE_MM = 100; // assume 100mm terminals
+const DEFAULT_PLUME_MM = 60;
+const KIND_LABELS = {
+  "window-opening": "Window opening",
+  "window-fabric": "Window fabric",
+  gutter: "Gutter / pipe",
+  eaves: "Eaves / soffit",
+  boundary: "Facing surface",
+  flue: "Flue ellipse"
+};
 
 // ==== INIT UI ====
 function populateManufacturers() {
@@ -145,25 +154,6 @@ function populateManufacturers() {
   manufacturerSelect.value = currentManufacturerKey;
 }
 populateManufacturers();
-
-function renderClearances() {
-  clearanceFields.innerHTML = "";
-  Object.entries(currentClearances).forEach(([name, value]) => {
-    const lab = document.createElement("label");
-    lab.textContent = name;
-    const inp = document.createElement("input");
-    inp.type = "number";
-    inp.value = value;
-    inp.style.width = "80px";
-    inp.addEventListener("input", () => {
-      currentClearances[name] = Number(inp.value);
-      evaluateAndRender();
-    });
-    lab.appendChild(inp);
-    clearanceFields.appendChild(lab);
-  });
-}
-renderClearances();
 
 // paint tool buttons
 document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
@@ -212,90 +202,15 @@ undoBtn.addEventListener("click", () => {
   }
 });
 
-// downloads
-function downloadCanvas(canv, filename) {
-  if (!canv) return;
-  if (canv.toBlob) {
-    canv.toBlob(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    });
-  } else {
-    const url = canv.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
+if (aiPass1Btn) {
+  aiPass1Btn.addEventListener("click", () => {
+    runAI({ includeMarks: false, button: aiPass1Btn });
+  });
 }
 
-downloadMarkedBtn.addEventListener("click", () => downloadCanvas(canvas, "flue-marked.png"));
-downloadOptABtn.addEventListener("click", () => downloadCanvas(optACanvas, "flue-option-a.png"));
-downloadOptBBtn.addEventListener("click", () => downloadCanvas(optBCanvas, "flue-option-b.png"));
-
-if (aiHighlightBtn) {
-  const defaultText = aiHighlightBtn.textContent;
-  aiHighlightBtn.addEventListener("click", async () => {
-    if (!bgImage) {
-      setAIStatus("Upload a background photo before running the AI.", { isError: true });
-      return;
-    }
-    if (!flue) {
-      setAIStatus("Place the flue ellipse before running the AI.", { isError: true });
-      return;
-    }
-
-    const payload = buildAIPayload();
-    setAIStatus("Analysing image with AI...");
-    aiHighlightBtn.disabled = true;
-    aiHighlightBtn.textContent = "Analysing...";
-
-    try {
-      const result = await analyseImageWithAI(payload);
-      aiOverlays = normaliseAIResult(result);
-
-      if (aiList) {
-        aiList.innerHTML = "";
-        aiOverlays.forEach((a, i) => {
-          const li = document.createElement("li");
-          li.textContent = `${i + 1}. ${formatAiAreaLabel(a, {
-            fallback: "Area"
-          })}`;
-          aiList.appendChild(li);
-        });
-      }
-
-      draw();
-      if (aiOverlays.length === 0) {
-        if (hasLocalFailures()) {
-          setAIStatus("AI didn't find anything but local check FAILED.", { isError: true });
-        } else {
-          setAIStatus("AI didn't find any concerns.");
-        }
-      } else {
-        const plural = aiOverlays.length === 1 ? "area" : "areas";
-        setAIStatus(`AI highlighted ${aiOverlays.length} ${plural}.`);
-      }
-    } catch (err) {
-      console.error("AI analysis failed", err);
-      const message = err && err.message ? err.message : "AI analysis failed.";
-      setAIStatus(message, { isError: true });
-      if (aiList) {
-        aiList.innerHTML = "";
-      }
-    } finally {
-      aiHighlightBtn.disabled = false;
-      aiHighlightBtn.textContent = defaultText;
-    }
+if (aiPass2Btn) {
+  aiPass2Btn.addEventListener("click", () => {
+    runAI({ includeMarks: true, button: aiPass2Btn });
   });
 }
 
@@ -303,7 +218,6 @@ if (aiHighlightBtn) {
 manufacturerSelect.addEventListener("change", () => {
   currentManufacturerKey = manufacturerSelect.value;
   currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
-  renderClearances();
   evaluateAndRender();
 });
 
@@ -382,11 +296,17 @@ function draw() {
   paintedObjects.forEach(shape => {
     const pts = shape.points;
     if (!pts || pts.length === 0) return;
-    const colour = colourForKind(shape.kind);
+    const evaluation = shape._evaluation;
+    const colour = evaluation
+      ? evaluation.pass
+        ? "rgba(34,197,94,0.85)"
+        : "rgba(239,68,68,0.9)"
+      : colourForKind(shape.kind);
+    const strokeWidth = evaluation ? 5 : 3;
 
     if (pts.length > 1) {
       ctx.strokeStyle = colour;
-      ctx.lineWidth = 3;
+      ctx.lineWidth = strokeWidth;
       ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(pts[0].x, pts[0].y);
@@ -395,12 +315,18 @@ function draw() {
       }
       if (pts.length > 2) {
         ctx.closePath();
+        ctx.fillStyle = evaluation
+          ? evaluation.pass
+            ? "rgba(34,197,94,0.15)"
+            : "rgba(239,68,68,0.2)"
+          : "rgba(15,23,42,0.05)";
+        ctx.fill();
       }
       ctx.stroke();
     }
 
     pts.forEach(pt => {
-      ctx.fillStyle = "#fff";
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.strokeStyle = colour;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -409,6 +335,18 @@ function draw() {
       ctx.stroke();
     });
   });
+
+  if (flue && measurementResults.length > 0) {
+    measurementResults.forEach(result => {
+      if (!result.closestPoint) return;
+      ctx.strokeStyle = result.pass ? "rgba(34,197,94,0.6)" : "rgba(239,68,68,0.75)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(flue.x, flue.y);
+      ctx.lineTo(result.closestPoint.x, result.closestPoint.y);
+      ctx.stroke();
+    });
+  }
 
   if (flue) {
     ctx.strokeStyle = "red";
@@ -435,15 +373,24 @@ function draw() {
   distanceAnnotations.forEach(a => {
     ctx.font = "12px sans-serif";
     const textWidth = ctx.measureText ? ctx.measureText(a.text).width : 60;
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(a.x + 4, a.y - 16, textWidth + 8, 16);
-    ctx.fillStyle = "#fff";
-    ctx.fillText(a.text, a.x + 8, a.y - 4);
+
+    ctx.fillStyle = a.color || "rgba(15,23,42,0.85)";
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    const boxX = a.x + 10;
+    const boxY = a.y - 16;
+    ctx.fillStyle = "rgba(15,23,42,0.88)";
+    ctx.fillRect(boxX, boxY, textWidth + 12, 18);
+    ctx.strokeStyle = a.color || "rgba(148,163,184,0.6)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(boxX, boxY, textWidth + 12, 18);
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillText(a.text, boxX + 6, boxY + 13);
   });
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-  updateDownloadButtons();
 }
 
 function colourForKind(kind) {
@@ -471,10 +418,62 @@ function formatAiAreaLabel(area, { fallback = "AI area" } = {}) {
   return `${baseLabel}${conf}`;
 }
 
+function renderLegend() {
+  if (!legendEl) return;
+  legendEl.innerHTML = "";
+  if (!aiOverlays || aiOverlays.length === 0) {
+    return;
+  }
+
+  const heading = document.createElement("h3");
+  heading.textContent = "AI highlights";
+  legendEl.appendChild(heading);
+
+  const list = document.createElement("ol");
+  aiOverlays.forEach((area, index) => {
+    const item = document.createElement("li");
+    const label = formatAiAreaLabel(area, { fallback: "Area" });
+    const details = area.rule ? `${label} – ${area.rule}` : label;
+    item.textContent = `${index + 1}. ${details}`;
+    list.appendChild(item);
+  });
+  legendEl.appendChild(list);
+}
+
+function renderSuggestions() {
+  if (!aiList) return;
+  aiList.innerHTML = "";
+
+  if (!flue) {
+    const li = document.createElement("li");
+    li.textContent = "Add the flue ellipse to unlock suggestions.";
+    aiList.appendChild(li);
+    return;
+  }
+
+  if (!measurementResults || measurementResults.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "Mark nearby features to calculate clearances.";
+    aiList.appendChild(li);
+    return;
+  }
+
+  const sorted = [...measurementResults].sort((a, b) => Number(a.pass) - Number(b.pass));
+  sorted.forEach(result => {
+    const li = document.createElement("li");
+    if (result.pass) {
+      li.textContent = `${formatObjectLabel(result.kind)} clear (${result.actual}mm ≥ ${result.required}mm).`;
+    } else {
+      li.textContent = `${formatObjectLabel(result.kind)}: move ≥${result.required}mm away (currently ${result.actual}mm).`;
+    }
+    aiList.appendChild(li);
+  });
+}
+
 function drawAIOverlays() {
   if (!aiOverlays || aiOverlays.length === 0) return;
 
-  aiOverlays.forEach(area => {
+  aiOverlays.forEach((area, index) => {
     if (!area) return;
 
     const points = Array.isArray(area.points)
@@ -523,18 +522,31 @@ function drawAIOverlays() {
     }
 
     if (labelPoint) {
-      const txt = formatAiAreaLabel(areaWithPoints);
+      const txt = `${index + 1}. ${formatAiAreaLabel(areaWithPoints)}`;
 
       ctx.font = "12px sans-serif";
       const textWidth = ctx.measureText(txt).width;
       const pad = 4;
       const x = labelPoint.x + 6;
-      const y = labelPoint.y - 16;
+      const y = labelPoint.y - 20;
 
-      ctx.fillStyle = "rgba(0,0,0,0.75)";
-      ctx.fillRect(x, y, textWidth + pad * 2, 16);
-      ctx.fillStyle = "#fff";
-      ctx.fillText(txt, x + pad, y + 12);
+      ctx.fillStyle = "rgba(15,23,42,0.85)";
+      ctx.fillRect(x, y, textWidth + pad * 2, 18);
+      ctx.strokeStyle = "rgba(248,250,252,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, textWidth + pad * 2, 18);
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillText(txt, x + pad, y + 13);
+
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(15,23,42,0.9)";
+      ctx.arc(labelPoint.x, labelPoint.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(`${index + 1}`, labelPoint.x, labelPoint.y + 4);
+      ctx.textAlign = "start";
     }
 
     ctx.restore();
@@ -785,40 +797,53 @@ function ruleForKind(kind) {
     case "window-opening":
       // to opening / vent / opening sash
       return { label: "window opening", mm: 300 };
-    case "door":
-      return { label: "door opening", mm: 300 };
     case "eaves":
-      return { label: "below eaves", mm: currentClearances.belowEaves };
+      return { label: "eaves / soffit", mm: currentClearances.belowEaves };
     case "gutter":
-    case "downpipe":
-      return { label: "below gutter/pipe", mm: currentClearances.belowGutter };
+      return { label: "gutter / pipe", mm: currentClearances.belowGutter };
     case "boundary":
-      return { label: "boundary/surface", mm: currentClearances.toFacingSurface };
+      return { label: "facing surface", mm: currentClearances.toFacingSurface };
     default:
       return { label: "opening", mm: currentClearances.toOpening };
   }
 }
 
+function formatObjectLabel(kind) {
+  if (!kind) return "";
+  if (KIND_LABELS[kind]) return KIND_LABELS[kind];
+  return kind
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, chr => chr.toUpperCase());
+}
+
 function evaluateAndRender() {
+  if (!resultsBody) return;
   resultsBody.innerHTML = "";
   invalidateAIOverlays();
+  measurementResults = [];
+  distanceAnnotations = [];
+
   if (!flue) {
-    distanceAnnotations = [];
     lastPxPerMm = null;
+    const emptyRow = document.createElement("tr");
+    emptyRow.className = "empty";
+    emptyRow.innerHTML = '<td colspan="6">Add a flue and marks to see clearances.</td>';
+    resultsBody.appendChild(emptyRow);
     draw();
+    renderSuggestions();
     return;
   }
 
-  // scale: use horizontal diameter = 100mm
   const fluePxDiameter = flue.rx * 2;
   const pxPerMm = fluePxDiameter / FLUE_MM;
   lastPxPerMm = pxPerMm;
 
-  const rows = [];
-  distanceAnnotations = [];
   paintedObjects.forEach(shape => {
     const pts = shape.points;
-    if (!pts || pts.length < 2) return;
+    if (!pts || pts.length < 2) {
+      shape._evaluation = null;
+      return;
+    }
 
     const rule = ruleForKind(shape.kind);
     let minPx = Infinity;
@@ -832,40 +857,60 @@ function evaluateAndRender() {
       }
     });
 
-    if (!isFinite(minPx)) return;
-
-    const distMm = minPx / pxPerMm;
-    if (closestPoint) {
-      distanceAnnotations.push({
-        x: closestPoint.x,
-        y: closestPoint.y,
-        text: `${Math.round(distMm)}mm / ${rule.mm}mm`
-      });
+    if (!isFinite(minPx)) {
+      shape._evaluation = null;
+      return;
     }
 
-    rows.push({
-      object: shape.kind,
-      rule: rule.label,
+    const distMm = minPx / pxPerMm;
+    const actualRounded = Math.round(distMm);
+    const evaluation = {
+      shape,
+      kind: shape.kind,
+      label: rule.label,
       required: rule.mm,
-      actual: Math.round(distMm),
-      pass: distMm >= rule.mm
-    });
+      actual: actualRounded,
+      pass: distMm >= rule.mm,
+      closestPoint
+    };
+
+    measurementResults.push(evaluation);
+    shape._evaluation = evaluation;
   });
 
-  rows.forEach(r => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${r.object}</td>
-      <td>${r.rule}</td>
-      <td>${r.required} mm</td>
-      <td>${r.actual} mm</td>
-      <td class="${r.pass ? "pass" : "fail"}">${r.pass ? "✔" : "✖"}</td>
-    `;
-    resultsBody.appendChild(tr);
-  });
+  if (measurementResults.length === 0) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.className = "empty";
+    emptyRow.innerHTML = '<td colspan="6">Mark nearby objects to measure clearances.</td>';
+    resultsBody.appendChild(emptyRow);
+  } else {
+    measurementResults.forEach((result, index) => {
+      if (result.closestPoint) {
+        distanceAnnotations.push({
+          x: result.closestPoint.x,
+          y: result.closestPoint.y,
+          text: `#${index + 1}: ${result.actual}mm / ${result.required}mm`,
+          color: result.pass ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.95)"
+        });
+      }
+
+      const tr = document.createElement("tr");
+      tr.className = result.pass ? "pass-row" : "fail-row";
+      tr.innerHTML = `
+        <td>${index + 1}</td>
+        <td>${formatObjectLabel(result.kind)}</td>
+        <td>${result.label}</td>
+        <td>${result.required}</td>
+        <td>${result.actual}</td>
+        <td class="status">${result.pass ? "✔" : "✖"}</td>
+      `;
+      resultsBody.appendChild(tr);
+    });
+  }
 
   draw();
   renderPreviews(pxPerMm);
+  renderSuggestions();
 }
 
 function hasLocalFailures() {
@@ -886,14 +931,6 @@ function hasLocalFailures() {
     if (mm < rule.mm) return true;
   }
   return false;
-}
-
-function updateDownloadButtons() {
-  const hasBackground = !!bgImage;
-  downloadMarkedBtn.disabled = !hasBackground;
-  const hasPreviews = hasBackground && !!flue;
-  downloadOptABtn.disabled = !hasPreviews;
-  downloadOptBBtn.disabled = !hasPreviews;
 }
 
 // ==== PREVIEWS (same idea as before) ====
@@ -970,7 +1007,7 @@ function renderPreviews(pxPerMm) {
     const fluePrevB = mapToPreview({ x: flue.x, y: flue.y }, metaB);
     const movedPrevB = mapToPreview({ x: targetX, y: flue.y }, metaB);
 
-    const plumeMm = parseFloat(plumeMmInput.value) || 60;
+    const plumeMm = DEFAULT_PLUME_MM;
     const plumePx = plumeMm * pxPerMm * metaB.s;
 
     optBCTX.strokeStyle = "blue";
@@ -998,43 +1035,33 @@ function renderPreviews(pxPerMm) {
   }
 }
 
-function buildAIPayload() {
-  const rows = [];
-  if (flue) {
-    const fluePxDiameter = flue.rx * 2;
-    const pxPerMm = fluePxDiameter / FLUE_MM;
-    paintedObjects.forEach(shape => {
-      if (!shape.points || shape.points.length < 2) return;
-      let minPx = Infinity;
-      for (let i = 0; i < shape.points.length; i++) {
-        const a = shape.points[i];
-        const b = shape.points[(i + 1) % shape.points.length];
-        const d = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
-        if (d < minPx) minPx = d;
-      }
-      const rule = ruleForKind(shape.kind);
-      const actualMm = minPx / pxPerMm;
-      rows.push({
-        kind: shape.kind,
-        requiredMm: rule.mm,
-        actualMm: Math.round(actualMm)
-      });
-    });
-  }
-
+function buildAIPayload({ includeMarks = true } = {}) {
   const payload = {
     image: canvas.toDataURL("image/png"),
-    flue: flue ? { x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry } : null,
-    shapes: paintedObjects.map(shape => ({
+    manufacturer: currentManufacturerKey,
+    boilerType: boilerTypeSelect ? boilerTypeSelect.value : "fan",
+    clearances: { ...currentClearances },
+    rules: { ...currentClearances }
+  };
+
+  if (flue) {
+    payload.flue = { x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry };
+  }
+
+  if (includeMarks) {
+    payload.shapes = paintedObjects.map(shape => ({
       kind: shape.kind,
       points: (shape.points || []).map(pt => ({ x: pt.x, y: pt.y }))
-    })),
-    manufacturer: currentManufacturerKey,
-    clearances: { ...currentClearances },
-    rules: { ...currentClearances },
-    plumeMm: parseFloat(plumeMmInput.value) || undefined,
-    measurements: rows
-  };
+    }));
+    payload.measurements = (measurementResults || []).map(res => ({
+      kind: res.kind,
+      requiredMm: res.required,
+      actualMm: res.actual
+    }));
+  } else {
+    payload.shapes = [];
+    payload.measurements = [];
+  }
 
   if (lastPxPerMm && isFinite(lastPxPerMm)) {
     payload.scale = lastPxPerMm * 100; // px per 100mm
@@ -1042,11 +1069,69 @@ function buildAIPayload() {
   if (!payload.flue) {
     delete payload.flue;
   }
-  if (payload.plumeMm === undefined) {
-    delete payload.plumeMm;
+  return payload;
+}
+
+async function runAI({ includeMarks = true, button } = {}) {
+  if (!bgImage) {
+    setAIStatus("Upload a wall photo before running the AI.", { isError: true });
+    return;
+  }
+  if (!flue) {
+    setAIStatus("Place the flue ellipse before running the AI.", { isError: true });
+    return;
   }
 
-  return payload;
+  const payload = buildAIPayload({ includeMarks });
+  const analysingText = includeMarks
+    ? "Analysing with your marks..."
+    : "Analysing the photo...";
+  setAIStatus(analysingText);
+
+  let defaultText = "";
+  if (button) {
+    defaultText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Analysing...";
+  }
+
+  aiOverlays = [];
+  renderLegend();
+  draw();
+
+  try {
+    const result = await analyseImageWithAI(payload);
+    aiOverlays = normaliseAIResult(result);
+    renderLegend();
+    draw();
+
+    if (aiOverlays.length === 0) {
+      if (includeMarks && hasLocalFailures()) {
+        setAIStatus("AI found no extra zones, but local check FAILED.", { isError: true });
+      } else {
+        const msg = includeMarks
+          ? "AI didn't find additional risks with your marks."
+          : "AI auto zones found no concerns.";
+        setAIStatus(msg);
+      }
+    } else {
+      const plural = aiOverlays.length === 1 ? "area" : "areas";
+      const suffix = includeMarks ? " using your marks" : " automatically";
+      setAIStatus(`AI highlighted ${aiOverlays.length} ${plural}${suffix}.`);
+    }
+  } catch (err) {
+    console.error("AI analysis failed", err);
+    const message = err && err.message ? err.message : "AI analysis failed.";
+    setAIStatus(message, { isError: true });
+    aiOverlays = [];
+    renderLegend();
+    draw();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = defaultText || "Run again";
+    }
+  }
 }
 
 function normaliseAIResult(result) {
@@ -1096,5 +1181,7 @@ async function analyseImageWithAI(payload) {
 }
 
 // initial draw
+renderSuggestions();
+renderLegend();
 draw();
 

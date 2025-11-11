@@ -9,84 +9,88 @@
 <body>
   <div id="app">
     <aside id="sidebar">
-      <h2>Flue checker</h2>
+      <h2>Flue Genie</h2>
+
+      <label class="upload-label">
+        Upload photo
+        <input type="file" id="bgUpload" accept="image/*">
+      </label>
 
       <label>
-        Manufacturer
+        Boiler type
+        <select id="boilerType">
+          <option value="fan" selected>Fan-assisted / room-sealed</option>
+        </select>
+      </label>
+
+      <label>
+        Manufacturer / set
         <select id="manufacturerSelect"></select>
       </label>
 
-      <h3>Clearances (mm)</h3>
-      <div id="clearanceFields"></div>
+      <div id="instructions">
+        <p>1. Upload the wall photo.</p>
+        <p>2. Select maker (clearances update).</p>
+        <p>3. Tap “Flue ellipse” and size it tightly around the terminal.</p>
+        <p>4. Pick a tool (window opening, gutter, eaves) and tap 2–3 points to mark it.</p>
+        <p>5. Click “AI: highlight” to see risk zones.</p>
+      </div>
 
-      <h3>Paint tool</h3>
       <div id="tools">
-        <button data-tool="window-fabric">Window – fabric (150)</button>
-        <button data-tool="window-opening">Window – opening (300)</button>
-        <button data-tool="door">Door</button>
-        <button data-tool="eaves">Eaves</button>
-        <button data-tool="gutter">Gutter</button>
-        <button data-tool="downpipe">Downpipe</button>
-        <button data-tool="boundary">Boundary</button>
+        <button data-tool="window-opening">Window opening (300mm)</button>
+        <button data-tool="window-fabric">Window fabric (150mm)</button>
+        <button data-tool="gutter">Gutter / pipe (75mm)</button>
+        <button data-tool="eaves">Eaves / soffit (200mm)</button>
+        <button data-tool="boundary">Facing surface (600mm)</button>
         <button data-tool="flue" class="primary">Flue ellipse</button>
         <button id="undoBtn">Undo</button>
-        <small>Tap two points to create a line. Drag the square handles to adjust.</small>
       </div>
 
-      <div id="flueSizeBtns">
-        <button data-flue-mm="100" class="active">100 mm</button>
-        <button data-flue-mm="125">125 mm</button>
+      <div id="aiControls">
+        <button id="aiPass1Btn">AI: auto zones</button>
+        <button id="aiPass2Btn">AI: refine with my marks</button>
+        <span id="aiStatus" role="status" aria-live="polite"></span>
+        <ul id="aiList"></ul>
       </div>
-
-      <label>
-        Plume tube (mm)
-        <input type="number" id="plumeMm" value="60" />
-      </label>
-
-      <input type="file" id="bgUpload" accept="image/*" />
-
     </aside>
     <main>
+      <section id="resultsPanel">
+        <h3>Results</h3>
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Object</th>
+              <th>Rule</th>
+              <th>Req (mm)</th>
+              <th>Actual (mm)</th>
+              <th>OK?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="empty">
+              <td colspan="6">Add a flue and marks to see clearances.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
       <div id="canvasWrapper">
         <canvas id="sceneCanvas" width="900" height="600"></canvas>
       </div>
 
-      <div class="download-actions">
-        <button id="downloadMarkedBtn" disabled>Download marked-up photo</button>
-      </div>
-
-      <div class="ai-actions">
-        <button id="aiHighlightBtn" class="primary">AI: highlight concerns</button>
-        <p id="aiStatus" class="ai-status" role="status" aria-live="polite"></p>
-        <ul id="aiList"></ul>
-      </div>
+      <div id="legend"></div>
 
       <div class="previews">
         <div>
-          <h3>Option A: move flue</h3>
-          <canvas id="optA" width="320" height="240"></canvas>
-          <div class="download-actions">
-            <button id="downloadOptABtn" disabled>Download Option A</button>
-          </div>
+          <h3>Option A (move)</h3>
+          <canvas id="optA" width="320" height="200"></canvas>
         </div>
         <div>
-          <h3>Option B: plume kit</h3>
-          <canvas id="optB" width="320" height="240"></canvas>
-          <div class="download-actions">
-            <button id="downloadOptBBtn" disabled>Download Option B</button>
-          </div>
+          <h3>Option B (plume)</h3>
+          <canvas id="optB" width="320" height="200"></canvas>
         </div>
       </div>
-
-      <h3>Checks</h3>
-      <table id="resultsTable">
-        <thead>
-          <tr>
-            <th>Object</th><th>Rule</th><th>Req (mm)</th><th>Actual (mm)</th><th>OK?</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
     </main>
   </div>
 
