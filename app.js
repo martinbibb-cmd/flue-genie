@@ -930,71 +930,72 @@ function isPositionClear(x, y, pxPerMm) {
   }
   return true;
 }
+function findFirstClearX(startX, y, pxPerMm) {
+  const maxSearchPx = canvas.width;
+  const stepPx = 5;
+
+  for (let offset = stepPx; offset < maxSearchPx; offset += stepPx) {
+    const candidateX = startX + offset;
+    if (isPositionClear(candidateX, y, pxPerMm)) {
+      return candidateX;
+    }
+  }
+  return null;
+}
+
 function renderPreviews(pxPerMm) {
   optACTX.clearRect(0,0,optACanvas.width,optACanvas.height);
   optBCTX.clearRect(0,0,optBCanvas.width,optBCanvas.height);
   if (!bgImage || !flue) return;
 
-  let targetX = flue.x;
-  const maxSearchPx = canvas.width;
-  const stepPx = 5;
-
-  let found = false;
-  for (let offset = stepPx; offset < maxSearchPx; offset += stepPx) {
-    const candidateX = flue.x + offset;
-    if (isPositionClear(candidateX, flue.y, pxPerMm)) {
-      targetX = candidateX;
-      found = true;
-      break;
-    }
-  }
-
-  if (!found) {
-    targetX = flue.x;
-  }
+  const targetX = findFirstClearX(flue.x, flue.y, pxPerMm);
 
   const metaA = drawScaled(optACTX, bgImage, optACanvas);
   const metaB = drawScaled(optBCTX, bgImage, optBCanvas);
 
-  const moved = { x: targetX, y: flue.y };
+  if (targetX !== null) {
+    const movedPrev = mapToPreview({ x: targetX, y: flue.y }, metaA);
+    optACTX.strokeStyle = "red";
+    optACTX.lineWidth = 2;
+    optACTX.beginPath();
+    optACTX.ellipse(movedPrev.x, movedPrev.y, flue.rx*metaA.s, flue.ry*metaA.s, 0, 0, Math.PI*2);
+    optACTX.stroke();
+  } else {
+    optACTX.fillStyle = "#c00";
+    optACTX.font = "14px sans-serif";
+    optACTX.fillText("No clear position found on this line.", 10, 20);
+  }
 
-  // OPTION A
-  const movedPrev = mapToPreview(moved, metaA);
-  const rxPrev = flue.rx * metaA.s;
-  const ryPrev = flue.ry * metaA.s;
-  optACTX.strokeStyle = "red";
-  optACTX.lineWidth = 2;
-  optACTX.beginPath();
-  optACTX.ellipse(movedPrev.x, movedPrev.y, rxPrev, ryPrev, 0, 0, Math.PI*2);
-  optACTX.stroke();
+  if (targetX !== null) {
+    const fluePrevB = mapToPreview({ x: flue.x, y: flue.y }, metaB);
+    const movedPrevB = mapToPreview({ x: targetX, y: flue.y }, metaB);
 
-  // OPTION B
-  const fluePrevB = mapToPreview({x: flue.x, y: flue.y}, metaB);
-  const movedPrevB = mapToPreview(moved, metaB);
-  const plumeMm = parseFloat(plumeMmInput.value) || 60;
-  const plumePx = plumeMm * pxPerMm * metaB.s;
+    const plumeMm = parseFloat(plumeMmInput.value) || 60;
+    const plumePx = plumeMm * pxPerMm * metaB.s;
 
-  // original
-  optBCTX.strokeStyle = "blue";
-  optBCTX.lineWidth = 2;
-  optBCTX.beginPath();
-  optBCTX.ellipse(fluePrevB.x, fluePrevB.y, flue.rx*metaB.s, flue.ry*metaB.s, 0, 0, Math.PI*2);
-  optBCTX.stroke();
+    optBCTX.strokeStyle = "blue";
+    optBCTX.lineWidth = 2;
+    optBCTX.beginPath();
+    optBCTX.ellipse(fluePrevB.x, fluePrevB.y, flue.rx*metaB.s, flue.ry*metaB.s, 0, 0, Math.PI*2);
+    optBCTX.stroke();
 
-  // tube
-  optBCTX.strokeStyle = "blue";
-  optBCTX.lineWidth = plumePx;
-  optBCTX.lineCap = "round";
-  optBCTX.beginPath();
-  optBCTX.moveTo(fluePrevB.x, fluePrevB.y);
-  optBCTX.lineTo(movedPrevB.x, movedPrevB.y);
-  optBCTX.stroke();
+    optBCTX.strokeStyle = "blue";
+    optBCTX.lineWidth = plumePx;
+    optBCTX.lineCap = "round";
+    optBCTX.beginPath();
+    optBCTX.moveTo(fluePrevB.x, fluePrevB.y);
+    optBCTX.lineTo(movedPrevB.x, movedPrevB.y);
+    optBCTX.stroke();
 
-  // new terminal
-  optBCTX.lineWidth = 2;
-  optBCTX.beginPath();
-  optBCTX.ellipse(movedPrevB.x, movedPrevB.y, flue.rx*metaB.s, flue.ry*metaB.s, 0, 0, Math.PI*2);
-  optBCTX.stroke();
+    optBCTX.lineWidth = 2;
+    optBCTX.beginPath();
+    optBCTX.ellipse(movedPrevB.x, movedPrevB.y, flue.rx*metaB.s, flue.ry*metaB.s, 0, 0, Math.PI*2);
+    optBCTX.stroke();
+  } else {
+    optBCTX.fillStyle = "#c00";
+    optBCTX.font = "14px sans-serif";
+    optBCTX.fillText("No safe horizontal plume route.", 10, 20);
+  }
 }
 
 function buildAIPayload() {
