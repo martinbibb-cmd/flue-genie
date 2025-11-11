@@ -263,7 +263,11 @@ if (aiHighlightBtn) {
       aiOverlays = normaliseAIResult(result);
       draw();
       if (aiOverlays.length === 0) {
-        setAIStatus("AI didn't find any concerns.");
+        if (hasLocalFailures()) {
+          setAIStatus("AI didn't find anything but local check FAILED.", { isError: true });
+        } else {
+          setAIStatus("AI didn't find any concerns.");
+        }
       } else {
         const plural = aiOverlays.length === 1 ? "area" : "areas";
         setAIStatus(`AI highlighted ${aiOverlays.length} ${plural}.`);
@@ -864,6 +868,26 @@ function evaluateAndRender() {
   renderPreviews(pxPerMm);
 }
 
+function hasLocalFailures() {
+  if (!flue) return false;
+  const fluePxDiameter = flue.rx * 2;
+  const pxPerMm = fluePxDiameter / FLUE_MM;
+  for (const shape of paintedObjects) {
+    if (!shape.points || shape.points.length < 2) continue;
+    let minPx = Infinity;
+    for (let i = 0; i < shape.points.length; i++) {
+      const a = shape.points[i];
+      const b = shape.points[(i + 1) % shape.points.length];
+      const d = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
+      if (d < minPx) minPx = d;
+    }
+    const rule = ruleForKind(shape.kind);
+    const mm = minPx / pxPerMm;
+    if (mm < rule.mm) return true;
+  }
+  return false;
+}
+
 function updateDownloadButtons() {
   const hasBackground = !!bgImage;
   downloadMarkedBtn.disabled = !hasBackground;
@@ -888,31 +912,51 @@ function mapToPreview(pt, meta) {
     y: meta.oy + pt.y * meta.s
   };
 }
+function isPositionClear(x, y, pxPerMm) {
+  for (const shape of paintedObjects) {
+    if (!shape.points || shape.points.length < 2) continue;
+    let minPx = Infinity;
+    for (let i = 0; i < shape.points.length; i++) {
+      const a = shape.points[i];
+      const b = shape.points[(i + 1) % shape.points.length];
+      const d = pointToSegmentDist(x, y, a.x, a.y, b.x, b.y);
+      if (d < minPx) minPx = d;
+    }
+    const rule = ruleForKind(shape.kind);
+    const mm = minPx / pxPerMm;
+    if (mm < rule.mm) {
+      return false;
+    }
+  }
+  return true;
+}
 function renderPreviews(pxPerMm) {
   optACTX.clearRect(0,0,optACanvas.width,optACanvas.height);
   optBCTX.clearRect(0,0,optBCanvas.width,optBCanvas.height);
   if (!bgImage || !flue) return;
 
+  let targetX = flue.x;
+  const maxSearchPx = canvas.width;
+  const stepPx = 5;
+
+  let found = false;
+  for (let offset = stepPx; offset < maxSearchPx; offset += stepPx) {
+    const candidateX = flue.x + offset;
+    if (isPositionClear(candidateX, flue.y, pxPerMm)) {
+      targetX = candidateX;
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    targetX = flue.x;
+  }
+
   const metaA = drawScaled(optACTX, bgImage, optACanvas);
   const metaB = drawScaled(optBCTX, bgImage, optBCanvas);
 
-  // find closest mm
-  let closestMm = Infinity;
-  paintedObjects.forEach(shape => {
-    const pts = shape.points;
-    if (!pts || pts.length < 2) return;
-    forEachShapeSegment(pts, (a, b) => {
-      const dPx = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
-      const dMm = dPx / pxPerMm;
-      if (dMm < closestMm) closestMm = dMm;
-    });
-  });
-  const target = 300;
-  if (closestMm === Infinity) closestMm = target;
-  const deficitMm = Math.max(0, target - closestMm);
-  const movePx = deficitMm * pxPerMm;
-
-  const moved = { x: flue.x + movePx, y: flue.y };
+  const moved = { x: targetX, y: flue.y };
 
   // OPTION A
   const movedPrev = mapToPreview(moved, metaA);
@@ -954,18 +998,41 @@ function renderPreviews(pxPerMm) {
 }
 
 function buildAIPayload() {
-  const shapes = paintedObjects.map(shape => ({
-    kind: shape.kind,
-    points: (shape.points || []).map(pt => ({ x: pt.x, y: pt.y }))
-  }));
+  const rows = [];
+  if (flue) {
+    const fluePxDiameter = flue.rx * 2;
+    const pxPerMm = fluePxDiameter / FLUE_MM;
+    paintedObjects.forEach(shape => {
+      if (!shape.points || shape.points.length < 2) return;
+      let minPx = Infinity;
+      for (let i = 0; i < shape.points.length; i++) {
+        const a = shape.points[i];
+        const b = shape.points[(i + 1) % shape.points.length];
+        const d = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
+        if (d < minPx) minPx = d;
+      }
+      const rule = ruleForKind(shape.kind);
+      const actualMm = minPx / pxPerMm;
+      rows.push({
+        kind: shape.kind,
+        requiredMm: rule.mm,
+        actualMm: Math.round(actualMm)
+      });
+    });
+  }
 
   const payload = {
     image: canvas.toDataURL("image/png"),
     flue: flue ? { x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry } : null,
-    shapes,
+    shapes: paintedObjects.map(shape => ({
+      kind: shape.kind,
+      points: (shape.points || []).map(pt => ({ x: pt.x, y: pt.y }))
+    })),
     manufacturer: currentManufacturerKey,
     clearances: { ...currentClearances },
-    plumeMm: parseFloat(plumeMmInput.value) || undefined
+    rules: { ...currentClearances },
+    plumeMm: parseFloat(plumeMmInput.value) || undefined,
+    measurements: rows
   };
 
   if (lastPxPerMm && isFinite(lastPxPerMm)) {
