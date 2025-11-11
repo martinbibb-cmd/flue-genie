@@ -89,7 +89,7 @@ let lastPinchMid = null;
 // ==== STATE ====
 let currentManufacturerKey = "worcester";
 let currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
-let currentTool = "window";
+let currentTool = "window-fabric";
 let bgImage = null;
 
 const HANDLE_SIZE = 14;
@@ -97,6 +97,7 @@ const HANDLE_SIZE = 14;
 let paintedObjects = [];
 let activeLine = null;
 let draggingHandle = null;
+let distanceAnnotations = [];
 
 // flue is ELLIPSE
 // { x, y, rx, ry }
@@ -150,6 +151,11 @@ document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
     activeLine = null;
   });
 });
+
+const initialToolBtn = document.querySelector(`#tools button[data-tool="${currentTool}"]`);
+if (initialToolBtn) {
+  initialToolBtn.classList.add("active");
+}
 
 // undo
 undoBtn.addEventListener("click", () => {
@@ -346,6 +352,15 @@ function draw() {
     ctx.fill(); ctx.stroke();
   }
 
+  distanceAnnotations.forEach(a => {
+    ctx.font = "12px sans-serif";
+    const textWidth = ctx.measureText ? ctx.measureText(a.text).width : 60;
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(a.x + 4, a.y - 16, textWidth + 8, 16);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(a.text, a.x + 8, a.y - 4);
+  });
+
   ctx.restore();
 
   updateDownloadButtons();
@@ -353,7 +368,8 @@ function draw() {
 
 function colourForKind(kind) {
   switch (kind) {
-    case "window": return "#0088ff";
+    case "window-fabric": return "#0088ff";
+    case "window-opening": return "#3366ff";
     case "door": return "#0055aa";
     case "eaves": return "#ff9900";
     case "gutter": return "#00aa44";
@@ -555,16 +571,35 @@ function pointToSegmentDist(px,py,x1,y1,x2,y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
+function closestPointOnSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (dx === 0 && dy === 0) {
+    return { x: x1, y: y1 };
+  }
+  const t = ((px - x1)*dx + (py - y1)*dy) / (dx*dx + dy*dy);
+  const tt = Math.max(0, Math.min(1, t));
+  return {
+    x: x1 + tt*dx,
+    y: y1 + tt*dy
+  };
+}
+
 function ruleForKind(kind) {
   switch (kind) {
-    case "window":
+    case "window-fabric":
+      // to the fabric / fixed / non-opening part
+      return { label: "window fabric", mm: 150 };
+    case "window-opening":
+      // to opening / vent / opening sash
+      return { label: "window opening", mm: 300 };
     case "door":
-      return { label: "opening", mm: currentClearances.toOpening };
+      return { label: "door opening", mm: 300 };
     case "eaves":
       return { label: "below eaves", mm: currentClearances.belowEaves };
     case "gutter":
     case "downpipe":
-      return { label: "below gutter", mm: currentClearances.belowGutter };
+      return { label: "below gutter/pipe", mm: currentClearances.belowGutter };
     case "boundary":
       return { label: "boundary/surface", mm: currentClearances.toFacingSurface };
     default:
@@ -575,6 +610,7 @@ function ruleForKind(kind) {
 function evaluateAndRender() {
   resultsBody.innerHTML = "";
   if (!flue) {
+    distanceAnnotations = [];
     draw();
     return;
   }
@@ -584,11 +620,20 @@ function evaluateAndRender() {
   const pxPerMm = fluePxDiameter / FLUE_MM;
 
   const rows = [];
+  distanceAnnotations = [];
   paintedObjects.forEach(obj => {
     if (!obj.p1 || !obj.p2) return;
     const distPx = pointToSegmentDist(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
     const distMm = distPx / pxPerMm;
     const rule = ruleForKind(obj.kind);
+
+    const cp = closestPointOnSegment(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
+    distanceAnnotations.push({
+      x: cp.x,
+      y: cp.y,
+      text: `${Math.round(distMm)}mm / ${rule.mm}mm`
+    });
+
     rows.push({
       object: obj.kind,
       rule: rule.label,
