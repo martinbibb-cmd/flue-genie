@@ -77,6 +77,15 @@ const downloadOptBBtn = document.getElementById("downloadOptBBtn");
 
 canvas.style.touchAction = "none"; // for iOS
 
+// view / camera
+let viewScale = 1;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
+
+const activePointers = new Map(); // id -> {xScreen, yScreen}
+let lastPinchDist = null;
+let lastPinchMid = null;
+
 // ==== STATE ====
 let currentManufacturerKey = "worcester";
 let currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
@@ -208,6 +217,9 @@ bgUpload.addEventListener("change", e => {
     canvas.height = img.height;
     canvas.style.width = img.width + "px";
     canvas.style.height = img.height + "px";
+    viewScale = 1;
+    viewOffsetX = 0;
+    viewOffsetY = 0;
     draw();
   };
   img.src = URL.createObjectURL(file);
@@ -216,12 +228,11 @@ bgUpload.addEventListener("change", e => {
 // ==== POINTER HELPERS ====
 function getCanvasPos(evt) {
   const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: (evt.clientX - rect.left) * scaleX,
-    y: (evt.clientY - rect.top) * scaleY
-  };
+  const xScreen = evt.clientX - rect.left;
+  const yScreen = evt.clientY - rect.top;
+  const x = (xScreen - viewOffsetX) / viewScale;
+  const y = (yScreen - viewOffsetY) / viewScale;
+  return { x, y };
 }
 
 // ==== HITS FOR ELLIPSE ====
@@ -247,7 +258,10 @@ function hitFlueHeightHandle(pos) {
 
 // ==== DRAW ====
 function draw() {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+  ctx.setTransform(viewScale, 0, 0, viewScale, viewOffsetX, viewOffsetY);
+  ctx.clearRect(-viewOffsetX / viewScale, -viewOffsetY / viewScale,
+                canvas.width / viewScale, canvas.height / viewScale);
   if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
 
   // painted polylines
@@ -296,6 +310,8 @@ function draw() {
     ctx.fill(); ctx.stroke();
   }
 
+  ctx.restore();
+
   updateDownloadButtons();
 }
 
@@ -314,6 +330,21 @@ function colourForKind(kind) {
 // ==== POINTER EVENTS ====
 canvas.addEventListener("pointerdown", evt => {
   evt.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  activePointers.set(evt.pointerId, {
+    x: evt.clientX - rect.left,
+    y: evt.clientY - rect.top
+  });
+
+  if (activePointers.size === 2) {
+    draggingFlue = false;
+    draggingFlueW = false;
+    draggingFlueH = false;
+    lastPinchDist = getPinchDistance();
+    lastPinchMid = getPinchMidpoint();
+    return;
+  }
+
   const pos = getCanvasPos(evt);
 
   // try flue first
@@ -348,6 +379,35 @@ canvas.addEventListener("pointerdown", evt => {
 });
 
 canvas.addEventListener("pointermove", evt => {
+  const rect = canvas.getBoundingClientRect();
+  if (activePointers.has(evt.pointerId)) {
+    activePointers.set(evt.pointerId, {
+      x: evt.clientX - rect.left,
+      y: evt.clientY - rect.top
+    });
+  }
+
+  if (activePointers.size === 2) {
+    const newDist = getPinchDistance();
+    const newMid = getPinchMidpoint();
+
+    if (lastPinchDist && newDist) {
+      const scaleChange = newDist / lastPinchDist;
+      zoomAt(newMid.x, newMid.y, scaleChange);
+    }
+    if (lastPinchMid) {
+      const dx = newMid.x - lastPinchMid.x;
+      const dy = newMid.y - lastPinchMid.y;
+      viewOffsetX += dx;
+      viewOffsetY += dy;
+    }
+
+    lastPinchDist = newDist;
+    lastPinchMid = newMid;
+    draw();
+    return;
+  }
+
   const pos = getCanvasPos(evt);
   if (draggingFlue && flue) {
     flue.x = pos.x;
@@ -367,11 +427,52 @@ canvas.addEventListener("pointermove", evt => {
   }
 });
 
-canvas.addEventListener("pointerup", () => {
+canvas.addEventListener("pointerup", evt => {
+  activePointers.delete(evt.pointerId);
+  if (activePointers.size < 2) {
+    lastPinchDist = null;
+    lastPinchMid = null;
+  }
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
 });
+
+canvas.addEventListener("pointercancel", evt => {
+  activePointers.delete(evt.pointerId);
+  if (activePointers.size < 2) {
+    lastPinchDist = null;
+    lastPinchMid = null;
+  }
+  draggingFlue = false;
+  draggingFlueW = false;
+  draggingFlueH = false;
+});
+
+function getPinchDistance() {
+  const pts = Array.from(activePointers.values());
+  if (pts.length < 2) return null;
+  const a = pts[0], b = pts[1];
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function getPinchMidpoint() {
+  const pts = Array.from(activePointers.values());
+  if (pts.length < 2) return null;
+  const a = pts[0], b = pts[1];
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function zoomAt(screenX, screenY, scaleChange) {
+  const worldXBefore = (screenX - viewOffsetX) / viewScale;
+  const worldYBefore = (screenY - viewOffsetY) / viewScale;
+
+  viewScale *= scaleChange;
+  viewScale = Math.max(0.3, Math.min(viewScale, 5));
+
+  viewOffsetX = screenX - worldXBefore * viewScale;
+  viewOffsetY = screenY - worldYBefore * viewScale;
+}
 
 // ==== DISTANCE / RULES ====
 function pointToSegmentDist(px,py,x1,y1,x2,y2) {
