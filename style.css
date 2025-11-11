@@ -31,7 +31,7 @@ main {
 }
 #sceneCanvas {
   display: block;
-  touch-action: none; /* important for iOS */
+  /* allow the browser to scroll unless JS decides to prevent it */
   max-width: 100%;
 }
 .download-actions {

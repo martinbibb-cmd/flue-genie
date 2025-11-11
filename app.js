@@ -75,8 +75,6 @@ const downloadMarkedBtn = document.getElementById("downloadMarkedBtn");
 const downloadOptABtn = document.getElementById("downloadOptABtn");
 const downloadOptBBtn = document.getElementById("downloadOptBBtn");
 
-canvas.style.touchAction = "none"; // for iOS
-
 // view / camera
 let viewScale = 1;
 let viewOffsetX = 0;
@@ -93,10 +91,11 @@ let currentTool = "window-fabric";
 let bgImage = null;
 
 const HANDLE_SIZE = 14;
-// painted objects are 2-point lines: {kind, p1:{x,y}, p2:{x,y|null}}
+const CORNER_SIZE = 18;
+// painted objects are shapes: {kind, points:[{x,y}, ...]}
 let paintedObjects = [];
-let activeLine = null;
-let draggingHandle = null;
+let activeShape = null;
+let draggingCorner = null;
 let distanceAnnotations = [];
 
 // flue is ELLIPSE
@@ -141,14 +140,17 @@ renderClearances();
 // paint tool buttons
 document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
   btn.addEventListener("click", () => {
+    if (activeShape) {
+      const idx = paintedObjects.indexOf(activeShape);
+      if (idx !== -1) {
+        paintedObjects.splice(idx, 1);
+      }
+      activeShape = null;
+    }
     currentTool = btn.dataset.tool;
     document.querySelectorAll("#tools button[data-tool]").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
-    // switching tool cancels unfinished line
-    if (activeLine && !activeLine.p2) {
-      paintedObjects.pop();
-    }
-    activeLine = null;
+    draw();
   });
 });
 
@@ -159,9 +161,12 @@ if (initialToolBtn) {
 
 // undo
 undoBtn.addEventListener("click", () => {
-  if (activeLine && !activeLine.p2) {
-    activeLine = null;
-    paintedObjects.pop();
+  if (activeShape) {
+    const idx = paintedObjects.indexOf(activeShape);
+    if (idx !== -1) {
+      paintedObjects.splice(idx, 1);
+    }
+    activeShape = null;
     draw();
     return;
   }
@@ -266,24 +271,16 @@ function hitFlueHeightHandle(pos) {
   return Math.abs(pos.x - hx) <= HANDLE_SIZE && Math.abs(pos.y - hy) <= HANDLE_SIZE;
 }
 
-function hitHandle(pos, obj) {
-  const half = HANDLE_SIZE / 2;
-  const within = (target) => Math.abs(pos.x - target.x) <= half && Math.abs(pos.y - target.y) <= half;
-  if (within(obj.p1)) return "p1";
-  if (obj.p2 && within(obj.p2)) return "p2";
-  return null;
-}
-
-function snapToHandlePos(pos) {
-  for (let i = paintedObjects.length - 1; i >= 0; i--) {
-    const obj = paintedObjects[i];
-    const which = hitHandle(pos, obj);
-    if (which) {
-      const target = obj[which];
-      return { x: target.x, y: target.y };
+function hitCorner(pos, points) {
+  if (!points) return -1;
+  const half = CORNER_SIZE / 2;
+  for (let i = points.length - 1; i >= 0; i--) {
+    const pt = points[i];
+    if (Math.abs(pos.x - pt.x) <= half && Math.abs(pos.y - pt.y) <= half) {
+      return i;
     }
   }
-  return pos;
+  return -1;
 }
 
 // ==== DRAW ====
@@ -294,44 +291,37 @@ function draw() {
                 canvas.width / viewScale, canvas.height / viewScale);
   if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
 
-  // painted 2-point lines and handles
-  paintedObjects.forEach(obj => {
-    const colour = colourForKind(obj.kind);
-    if (obj.p2) {
+  // painted shapes and their corners
+  paintedObjects.forEach(shape => {
+    const pts = shape.points;
+    if (!pts || pts.length === 0) return;
+    const colour = colourForKind(shape.kind);
+
+    if (pts.length > 1) {
       ctx.strokeStyle = colour;
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 3;
       ctx.lineCap = "round";
       ctx.beginPath();
-      ctx.moveTo(obj.p1.x, obj.p1.y);
-      ctx.lineTo(obj.p2.x, obj.p2.y);
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      if (pts.length > 2) {
+        ctx.closePath();
+      }
       ctx.stroke();
     }
 
-    ctx.fillStyle = "#fff";
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.rect(obj.p1.x - HANDLE_SIZE/2, obj.p1.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.fill();
-    ctx.stroke();
-    if (obj.p2) {
+    pts.forEach(pt => {
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.rect(obj.p2.x - HANDLE_SIZE/2, obj.p2.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.rect(pt.x - CORNER_SIZE/2, pt.y - CORNER_SIZE/2, CORNER_SIZE, CORNER_SIZE);
       ctx.fill();
       ctx.stroke();
-    }
+    });
   });
-
-  if (activeLine && !activeLine.p2 && !paintedObjects.includes(activeLine)) {
-    const colour = colourForKind(activeLine.kind);
-    ctx.fillStyle = "#fff";
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.rect(activeLine.p1.x - HANDLE_SIZE/2, activeLine.p1.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.fill();
-    ctx.stroke();
-  }
 
   // flue ellipse
   if (flue) {
@@ -382,7 +372,6 @@ function colourForKind(kind) {
 
 // ==== POINTER EVENTS ====
 canvas.addEventListener("pointerdown", evt => {
-  evt.preventDefault();
   const rect = canvas.getBoundingClientRect();
   activePointers.set(evt.pointerId, {
     x: evt.clientX - rect.left,
@@ -390,68 +379,83 @@ canvas.addEventListener("pointerdown", evt => {
   });
 
   if (activePointers.size === 2) {
+    draggingCorner = null;
     draggingFlue = false;
     draggingFlueW = false;
     draggingFlueH = false;
     lastPinchDist = getPinchDistance();
     lastPinchMid = getPinchMidpoint();
+    evt.preventDefault();
     return;
   }
 
   const pos = getCanvasPos(evt);
 
-  // try to grab existing line handle
+  // try to grab an existing corner first
   for (let i = paintedObjects.length - 1; i >= 0; i--) {
-    const obj = paintedObjects[i];
-    const which = hitHandle(pos, obj);
-    if (which) {
-      draggingHandle = { objIndex: i, which };
+    const shape = paintedObjects[i];
+    const cornerIndex = hitCorner(pos, shape.points);
+    if (cornerIndex !== -1) {
+      evt.preventDefault();
+      draggingCorner = { shapeIndex: i, pointIndex: cornerIndex };
       return;
     }
   }
 
   // try flue first
   if (flue && hitFlueWidthHandle(pos)) {
+    evt.preventDefault();
     draggingFlueW = true;
     return;
   }
   if (flue && hitFlueHeightHandle(pos)) {
+    evt.preventDefault();
     draggingFlueH = true;
     return;
   }
   if (flue && hitFlueBody(pos)) {
+    evt.preventDefault();
     draggingFlue = true;
     return;
   }
 
   // placing new flue
   if (currentTool === "flue") {
-    // if we already HAVE a flue, do nothing here
-    // (you can move it by grabbing the middle, or resize by handles)
     if (!flue) {
+      evt.preventDefault();
       flue = { x: pos.x, y: pos.y, rx: 60, ry: 60 };
       evaluateAndRender();
     }
     return;
   }
 
-  const snapped = snapToHandlePos(pos);
+  if (!activeShape && !currentTool) {
+    return;
+  }
 
-  if (!activeLine || activeLine.kind !== currentTool || activeLine.p2) {
-    const newLine = {
-      kind: currentTool,
-      p1: { x: snapped.x, y: snapped.y },
-      p2: null
-    };
-    paintedObjects.push(newLine);
-    activeLine = newLine;
+  if (!activeShape) {
+    evt.preventDefault();
+    activeShape = { kind: currentTool, points: [pos] };
+    paintedObjects.push(activeShape);
     draw();
     return;
   }
 
-  activeLine.p2 = { x: snapped.x, y: snapped.y };
-  activeLine = null;
-  evaluateAndRender();
+  evt.preventDefault();
+  activeShape.points.push(pos);
+  if (activeShape.points.length === 3) {
+    const p1 = activeShape.points[0];
+    const p2 = activeShape.points[1];
+    const p3 = activeShape.points[2];
+    const p4 = { x: p1.x + (p3.x - p2.x), y: p1.y + (p3.y - p2.y) };
+    activeShape.points.push(p4);
+    activeShape = null;
+    currentTool = null;
+    document.querySelectorAll("#tools button[data-tool]").forEach(b => b.classList.remove("active"));
+    evaluateAndRender();
+  } else {
+    draw();
+  }
 });
 
 canvas.addEventListener("pointermove", evt => {
@@ -464,6 +468,7 @@ canvas.addEventListener("pointermove", evt => {
   }
 
   if (activePointers.size === 2) {
+    evt.preventDefault();
     const newDist = getPinchDistance();
     const newMid = getPinchMidpoint();
 
@@ -485,26 +490,30 @@ canvas.addEventListener("pointermove", evt => {
   }
 
   const pos = getCanvasPos(evt);
-  if (draggingHandle) {
-    const obj = paintedObjects[draggingHandle.objIndex];
-    if (obj) {
-      obj[draggingHandle.which] = { x: pos.x, y: pos.y };
+  if (draggingCorner) {
+    evt.preventDefault();
+    const shape = paintedObjects[draggingCorner.shapeIndex];
+    if (shape && shape.points && shape.points[draggingCorner.pointIndex]) {
+      shape.points[draggingCorner.pointIndex] = pos;
       evaluateAndRender();
     }
     return;
   }
   if (draggingFlue && flue) {
+    evt.preventDefault();
     flue.x = pos.x;
     flue.y = pos.y;
     evaluateAndRender();
     return;
   }
   if (draggingFlueW && flue) {
+    evt.preventDefault();
     flue.rx = Math.max(10, Math.abs(pos.x - flue.x));
     evaluateAndRender();
     return;
   }
   if (draggingFlueH && flue) {
+    evt.preventDefault();
     flue.ry = Math.max(10, Math.abs(pos.y - flue.y));
     evaluateAndRender();
     return;
@@ -520,7 +529,7 @@ canvas.addEventListener("pointerup", evt => {
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
-  draggingHandle = null;
+  draggingCorner = null;
 });
 
 canvas.addEventListener("pointercancel", evt => {
@@ -532,7 +541,7 @@ canvas.addEventListener("pointercancel", evt => {
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
-  draggingHandle = null;
+  draggingCorner = null;
 });
 
 function getPinchDistance() {
@@ -586,6 +595,16 @@ function closestPointOnSegment(px, py, x1, y1, x2, y2) {
   };
 }
 
+function forEachShapeSegment(points, callback) {
+  if (!points || points.length < 2) return;
+  for (let i = 0; i < points.length - 1; i++) {
+    callback(points[i], points[i + 1], i, i + 1);
+  }
+  if (points.length > 2) {
+    callback(points[points.length - 1], points[0], points.length - 1, 0);
+  }
+}
+
 function ruleForKind(kind) {
   switch (kind) {
     case "window-fabric":
@@ -622,21 +641,35 @@ function evaluateAndRender() {
 
   const rows = [];
   distanceAnnotations = [];
-  paintedObjects.forEach(obj => {
-    if (!obj.p1 || !obj.p2) return;
-    const distPx = pointToSegmentDist(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
-    const distMm = distPx / pxPerMm;
-    const rule = ruleForKind(obj.kind);
+  paintedObjects.forEach(shape => {
+    const pts = shape.points;
+    if (!pts || pts.length < 2) return;
 
-    const cp = closestPointOnSegment(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
-    distanceAnnotations.push({
-      x: cp.x,
-      y: cp.y,
-      text: `${Math.round(distMm)}mm / ${rule.mm}mm`
+    const rule = ruleForKind(shape.kind);
+    let minPx = Infinity;
+    let closestPoint = null;
+
+    forEachShapeSegment(pts, (a, b) => {
+      const distPx = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
+      if (distPx < minPx) {
+        minPx = distPx;
+        closestPoint = closestPointOnSegment(flue.x, flue.y, a.x, a.y, b.x, b.y);
+      }
     });
 
+    if (!isFinite(minPx)) return;
+
+    const distMm = minPx / pxPerMm;
+    if (closestPoint) {
+      distanceAnnotations.push({
+        x: closestPoint.x,
+        y: closestPoint.y,
+        text: `${Math.round(distMm)}mm / ${rule.mm}mm`
+      });
+    }
+
     rows.push({
-      object: obj.kind,
+      object: shape.kind,
       rule: rule.label,
       required: rule.mm,
       actual: Math.round(distMm),
@@ -694,11 +727,14 @@ function renderPreviews(pxPerMm) {
 
   // find closest mm
   let closestMm = Infinity;
-  paintedObjects.forEach(obj => {
-    if (!obj.p1 || !obj.p2) return;
-    const dPx = pointToSegmentDist(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
-    const dMm = dPx / pxPerMm;
-    if (dMm < closestMm) closestMm = dMm;
+  paintedObjects.forEach(shape => {
+    const pts = shape.points;
+    if (!pts || pts.length < 2) return;
+    forEachShapeSegment(pts, (a, b) => {
+      const dPx = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
+      const dMm = dPx / pxPerMm;
+      if (dMm < closestMm) closestMm = dMm;
+    });
   });
   const target = 300;
   if (closestMm === Infinity) closestMm = target;
