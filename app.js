@@ -1,60 +1,18 @@
 // ==== BASIC DATA (all the usual suspects) ====
-const MANUFACTURER_RULES = {
-  worcester: {
-    label: "Worcester",
-    clearances: {
-      toOpening: 300,
-      belowEaves: 200,
-      belowGutter: 75,
-      reducedWithExtension: 25,
-      toFacingSurface: 600,
-      toBoundary: 300,
-      terminalFacingTerminal: 1200,
-      verticalOnSameWall: 1500,
-      toOppositeOpening: 2000
-    }
-  },
-  vaillant: {
-    label: "Vaillant / ecoTEC",
-    clearances: {
-      toOpening: 300,
-      belowEaves: 200,
-      belowGutter: 75,
-      reducedWithExtension: 25,
-      toFacingSurface: 600,
-      toBoundary: 300,
-      terminalFacingTerminal: 1200,
-      verticalOnSameWall: 1500,
-      toOppositeOpening: 2000
-    }
-  },
-  ideal: {
-    label: "Ideal Logic+",
-    clearances: {
-      toOpening: 300,
-      belowEaves: 200,
-      belowGutter: 75,
-      reducedWithExtension: 25,
-      toFacingSurface: 600,
-      toBoundary: 300,
-      terminalFacingTerminal: 1200,
-      verticalOnSameWall: 1500,
-      toOppositeOpening: 2000
-    }
-  },
-  viessmann: {
-    label: "Viessmann (BS 5440 set)",
-    clearances: {
-      toOpening: 300,
-      belowEaves: 200,
-      belowGutter: 75,
-      reducedWithExtension: 25,
-      toFacingSurface: 600,
-      toBoundary: 300,
-      terminalFacingTerminal: 1200,
-      verticalOnSameWall: 1500,
-      toOppositeOpening: 2000
-    }
+const MANUFACTURERS = [
+  { value: "worcester", label: "Worcester" },
+  { value: "vaillant", label: "Vaillant / ecoTEC" },
+  { value: "ideal", label: "Ideal Logic+" },
+  { value: "viessmann", label: "Viessmann (BS 5440 set)" }
+];
+
+const RULE_SETS = {
+  fan: {
+    windowOpening: 300,
+    windowFabric: 150,
+    eaves: 200,
+    gutter: 75,
+    boundary: 600
   }
 };
 
@@ -90,8 +48,8 @@ let lastPinchDist = null;
 let lastPinchMid = null;
 
 // ==== STATE ====
-let currentManufacturerKey = "worcester";
-let currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
+let currentManufacturerKey = MANUFACTURERS[0]?.value || "worcester";
+let currentRules = { ...RULE_SETS.fan };
 let currentTool = "window-fabric";
 let bgImage = null;
 
@@ -103,6 +61,7 @@ let activeShape = null;
 let draggingCorner = null;
 let distanceAnnotations = [];
 let aiOverlays = [];
+let safetyZones = [];
 let lastPxPerMm = null;
 let measurementResults = [];
 
@@ -145,10 +104,10 @@ const KIND_LABELS = {
 
 // ==== INIT UI ====
 function populateManufacturers() {
-  Object.entries(MANUFACTURER_RULES).forEach(([key, val]) => {
+  MANUFACTURERS.forEach(({ value, label }) => {
     const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = val.label;
+    opt.value = value;
+    opt.textContent = label;
     manufacturerSelect.appendChild(opt);
   });
   manufacturerSelect.value = currentManufacturerKey;
@@ -217,7 +176,7 @@ if (aiPass2Btn) {
 // manufacturer change
 manufacturerSelect.addEventListener("change", () => {
   currentManufacturerKey = manufacturerSelect.value;
-  currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearances };
+  currentRules = { ...RULE_SETS.fan };
   evaluateAndRender();
 });
 
@@ -291,6 +250,17 @@ function draw() {
 
   if (bgImage) {
     ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+  }
+
+  if (safetyZones.length > 0) {
+    safetyZones.forEach(zone => {
+      if (zone.type === "circle") {
+        ctx.fillStyle = zone.color;
+        ctx.beginPath();
+        ctx.arc(zone.cx, zone.cy, zone.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
   }
 
   paintedObjects.forEach(shape => {
@@ -406,11 +376,36 @@ function colourForKind(kind) {
   }
 }
 
+function colourForZone(zone) {
+  switch (zone) {
+    case "safe":
+      return {
+        stroke: "rgba(34,197,94,0.9)",
+        fill: "rgba(134,239,172,0.25)",
+        text: "#16a34a"
+      };
+    case "plume":
+      return {
+        stroke: "rgba(59,130,246,0.9)",
+        fill: "rgba(147,197,253,0.25)",
+        text: "#2563eb"
+      };
+    default:
+      return {
+        stroke: "rgba(239,68,68,0.9)",
+        fill: "rgba(248,113,113,0.25)",
+        text: "#dc2626"
+      };
+  }
+}
+
 function formatAiAreaLabel(area, { fallback = "AI area" } = {}) {
-  const baseLabel =
-    area && typeof area.label === "string" && area.label.trim().length > 0
-      ? area.label
-      : fallback;
+  let baseLabel = fallback;
+  if (area && typeof area.label === "string" && area.label.trim().length > 0) {
+    baseLabel = area.label;
+  } else if (area && typeof area.zone === "string" && area.zone.trim()) {
+    baseLabel = area.zone;
+  }
   const conf =
     area && typeof area.confidence === "number"
       ? ` (${Math.round(area.confidence * 100)}%)`
@@ -425,19 +420,14 @@ function renderLegend() {
     return;
   }
 
-  const heading = document.createElement("h3");
-  heading.textContent = "AI highlights";
-  legendEl.appendChild(heading);
-
-  const list = document.createElement("ol");
   aiOverlays.forEach((area, index) => {
-    const item = document.createElement("li");
-    const label = formatAiAreaLabel(area, { fallback: "Area" });
-    const details = area.rule ? `${label} – ${area.rule}` : label;
-    item.textContent = `${index + 1}. ${details}`;
-    list.appendChild(item);
+    const palette = colourForZone(area.zone);
+    const wrapper = document.createElement("div");
+    const label = formatAiAreaLabel(area, { fallback: "AI area" });
+    const info = area.rule ? `${label} – ${area.rule}` : label;
+    wrapper.innerHTML = `<strong style="color:${palette.text}">#${index + 1}</strong> ${info}`;
+    legendEl.appendChild(wrapper);
   });
-  legendEl.appendChild(list);
 }
 
 function renderSuggestions() {
@@ -462,12 +452,39 @@ function renderSuggestions() {
   sorted.forEach(result => {
     const li = document.createElement("li");
     if (result.pass) {
-      li.textContent = `${formatObjectLabel(result.kind)} clear (${result.actual}mm ≥ ${result.required}mm).`;
+      li.textContent = `${formatObjectLabel(result.kind)} OK – ${result.actual}mm ≥ ${result.required}mm required.`;
     } else {
-      li.textContent = `${formatObjectLabel(result.kind)}: move ≥${result.required}mm away (currently ${result.actual}mm).`;
+      li.textContent = `${formatObjectLabel(result.kind)}: move to ≥${result.required}mm (currently ${result.actual}mm).`;
     }
     aiList.appendChild(li);
   });
+}
+
+function getRemedyMessage() {
+  if (!flue) {
+    return "";
+  }
+
+  if (!measurementResults || measurementResults.length === 0) {
+    return "Mark nearby features to calculate clearances.";
+  }
+
+  let worst = null;
+  measurementResults.forEach(result => {
+    if (result.pass) return;
+    const deficit = result.required - result.actualMm;
+    if (!worst || deficit > worst.deficit) {
+      worst = { result, deficit };
+    }
+  });
+
+  if (worst) {
+    const shortfall = Math.max(0, Math.ceil(worst.deficit));
+    const label = worst.result.label || formatObjectLabel(worst.result.kind);
+    return `Move flue at least ${shortfall}mm away from ${label} or fit plume kit.`;
+  }
+
+  return "All clearances satisfied for fan-assisted flue.";
 }
 
 function drawAIOverlays() {
@@ -486,9 +503,10 @@ function drawAIOverlays() {
       : [];
 
     const areaWithPoints = { ...area, points };
+    const palette = colourForZone(areaWithPoints.zone);
 
     ctx.save();
-    ctx.strokeStyle = "rgba(255,0,0,0.8)";
+    ctx.strokeStyle = palette.stroke;
     ctx.lineWidth = 3;
 
     let labelPoint = null;
@@ -504,8 +522,17 @@ function drawAIOverlays() {
         ctx.lineTo(areaWithPoints.points[i].x, areaWithPoints.points[i].y);
       }
       ctx.closePath();
+      ctx.fillStyle = palette.fill;
+      ctx.fill();
       ctx.stroke();
-      labelPoint = areaWithPoints.points[0];
+      const centroid = areaWithPoints.points.reduce(
+        (acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }),
+        { x: 0, y: 0 }
+      );
+      labelPoint = {
+        x: centroid.x / areaWithPoints.points.length,
+        y: centroid.y / areaWithPoints.points.length
+      };
     } else if (
       areaWithPoints.type === "line" &&
       Array.isArray(areaWithPoints.points) &&
@@ -522,31 +549,17 @@ function drawAIOverlays() {
     }
 
     if (labelPoint) {
-      const txt = `${index + 1}. ${formatAiAreaLabel(areaWithPoints)}`;
-
-      ctx.font = "12px sans-serif";
-      const textWidth = ctx.measureText(txt).width;
-      const pad = 4;
-      const x = labelPoint.x + 6;
-      const y = labelPoint.y - 20;
-
-      ctx.fillStyle = "rgba(15,23,42,0.85)";
-      ctx.fillRect(x, y, textWidth + pad * 2, 18);
-      ctx.strokeStyle = "rgba(248,250,252,0.9)";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x, y, textWidth + pad * 2, 18);
-      ctx.fillStyle = "#f8fafc";
-      ctx.fillText(txt, x + pad, y + 13);
-
+      ctx.fillStyle = palette.stroke;
       ctx.beginPath();
-      ctx.fillStyle = "rgba(15,23,42,0.9)";
-      ctx.arc(labelPoint.x, labelPoint.y, 10, 0, Math.PI * 2);
+      ctx.arc(labelPoint.x, labelPoint.y, 14, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "#f8fafc";
-      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(`${index + 1}`, labelPoint.x, labelPoint.y + 4);
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${index + 1}`, labelPoint.x, labelPoint.y);
       ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
     }
 
     ctx.restore();
@@ -791,20 +804,18 @@ function forEachShapeSegment(points, callback) {
 
 function ruleForKind(kind) {
   switch (kind) {
-    case "window-fabric":
-      // to the fabric / fixed / non-opening part
-      return { label: "window fabric", mm: 150 };
     case "window-opening":
-      // to opening / vent / opening sash
-      return { label: "window opening", mm: 300 };
-    case "eaves":
-      return { label: "eaves / soffit", mm: currentClearances.belowEaves };
+      return { label: "window opening", mm: currentRules.windowOpening };
+    case "window-fabric":
+      return { label: "window fabric", mm: currentRules.windowFabric };
     case "gutter":
-      return { label: "gutter / pipe", mm: currentClearances.belowGutter };
+      return { label: "gutter/pipe", mm: currentRules.gutter };
+    case "eaves":
+      return { label: "eaves / soffit", mm: currentRules.eaves };
     case "boundary":
-      return { label: "facing surface", mm: currentClearances.toFacingSurface };
+      return { label: "facing surface/boundary", mm: currentRules.boundary };
     default:
-      return { label: "opening", mm: currentClearances.toOpening };
+      return { label: "opening", mm: currentRules.windowOpening };
   }
 }
 
@@ -822,6 +833,7 @@ function evaluateAndRender() {
   invalidateAIOverlays();
   measurementResults = [];
   distanceAnnotations = [];
+  safetyZones = [];
 
   if (!flue) {
     lastPxPerMm = null;
@@ -870,12 +882,22 @@ function evaluateAndRender() {
       label: rule.label,
       required: rule.mm,
       actual: actualRounded,
+      actualMm: distMm,
       pass: distMm >= rule.mm,
       closestPoint
     };
 
     measurementResults.push(evaluation);
     shape._evaluation = evaluation;
+
+    safetyZones.push({
+      type: "circle",
+      cx: flue.x,
+      cy: flue.y,
+      r: rule.mm * pxPerMm,
+      color: evaluation.pass ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.2)",
+      label: `${rule.label} ${evaluation.pass ? "PASS" : "FAIL"}`
+    });
   });
 
   if (measurementResults.length === 0) {
@@ -902,7 +924,7 @@ function evaluateAndRender() {
         <td>${result.label}</td>
         <td>${result.required}</td>
         <td>${result.actual}</td>
-        <td class="status">${result.pass ? "✔" : "✖"}</td>
+        <td class="status ${result.pass ? "pass" : "fail"}">${result.pass ? "✔" : "✖"}</td>
       `;
       resultsBody.appendChild(tr);
     });
@@ -911,6 +933,7 @@ function evaluateAndRender() {
   draw();
   renderPreviews(pxPerMm);
   renderSuggestions();
+  setAIStatus(getRemedyMessage());
 }
 
 function hasLocalFailures() {
@@ -1040,8 +1063,8 @@ function buildAIPayload({ includeMarks = true } = {}) {
     image: canvas.toDataURL("image/png"),
     manufacturer: currentManufacturerKey,
     boilerType: boilerTypeSelect ? boilerTypeSelect.value : "fan",
-    clearances: { ...currentClearances },
-    rules: { ...currentClearances }
+    clearances: { ...currentRules },
+    rules: { ...currentRules }
   };
 
   if (flue) {
@@ -1107,17 +1130,24 @@ async function runAI({ includeMarks = true, button } = {}) {
 
     if (aiOverlays.length === 0) {
       if (includeMarks && hasLocalFailures()) {
-        setAIStatus("AI found no extra zones, but local check FAILED.", { isError: true });
+        const remedy = getRemedyMessage();
+        const base = "AI found no extra zones, but local check FAILED.";
+        setAIStatus(remedy ? `${base} ${remedy}` : base, { isError: true });
       } else {
         const msg = includeMarks
           ? "AI didn't find additional risks with your marks."
           : "AI auto zones found no concerns.";
-        setAIStatus(msg);
+        const remedy = getRemedyMessage();
+        const combined = remedy ? `${msg} ${remedy}` : msg;
+        setAIStatus(combined.trim());
       }
     } else {
       const plural = aiOverlays.length === 1 ? "area" : "areas";
       const suffix = includeMarks ? " using your marks" : " automatically";
-      setAIStatus(`AI highlighted ${aiOverlays.length} ${plural}${suffix}.`);
+      const msg = `AI highlighted ${aiOverlays.length} ${plural}${suffix}.`;
+      const remedy = getRemedyMessage();
+      const combined = remedy ? `${msg} ${remedy}` : msg;
+      setAIStatus(combined.trim());
     }
   } catch (err) {
     console.error("AI analysis failed", err);
@@ -1152,6 +1182,7 @@ function normaliseAIResult(result) {
         type: area.type || (points.length <= 2 ? "line" : "polygon"),
         label: area.label,
         rule: area.rule,
+        zone: area.zone || "alert",
         confidence: typeof area.confidence === "number" ? area.confidence : undefined,
         points
       };
