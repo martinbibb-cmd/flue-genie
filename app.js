@@ -30,6 +30,9 @@ const optACanvas = document.getElementById("optA");
 const optACTX = optACanvas.getContext("2d");
 const optBCanvas = document.getElementById("optB");
 const optBCTX = optBCanvas.getContext("2d");
+const downloadMarkedBtn = document.getElementById("downloadMarkedBtn");
+const downloadOptABtn = document.getElementById("downloadOptABtn");
+const downloadOptBBtn = document.getElementById("downloadOptBBtn");
 
 canvas.style.touchAction = "none"; // for iOS
 
@@ -114,6 +117,36 @@ undoBtn.addEventListener("click", () => {
     draw();
   }
 });
+
+// downloads
+function downloadCanvas(canv, filename) {
+  if (!canv) return;
+  if (canv.toBlob) {
+    canv.toBlob(blob => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  } else {
+    const url = canv.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+}
+
+downloadMarkedBtn.addEventListener("click", () => downloadCanvas(canvas, "flue-marked.png"));
+downloadOptABtn.addEventListener("click", () => downloadCanvas(optACanvas, "flue-option-a.png"));
+downloadOptBBtn.addEventListener("click", () => downloadCanvas(optBCanvas, "flue-option-b.png"));
 
 // manufacturer change
 manufacturerSelect.addEventListener("change", () => {
@@ -221,6 +254,8 @@ function draw() {
     ctx.rect(flue.x - HANDLE_SIZE/2, flue.y + flue.ry - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
     ctx.fill(); ctx.stroke();
   }
+
+  updateDownloadButtons();
 }
 
 function colourForKind(kind) {
@@ -378,6 +413,14 @@ function evaluateAndRender() {
 
   draw();
   renderPreviews(pxPerMm);
+}
+
+function updateDownloadButtons() {
+  const hasBackground = !!bgImage;
+  downloadMarkedBtn.disabled = !hasBackground;
+  const hasPreviews = hasBackground && !!flue;
+  downloadOptABtn.disabled = !hasPreviews;
+  downloadOptBBtn.disabled = !hasPreviews;
 }
 
 // ==== PREVIEWS (same idea as before) ====
