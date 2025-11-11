@@ -13,11 +13,16 @@ export default {
       });
     }
 
-    // Handle POST to / and /analyse-flue-image
-    if (
-      request.method === "POST" &&
-      (url.pathname === "/" || url.pathname === "/analyse-flue-image")
-    ) {
+    const normalisedPath = url.pathname.replace(/\/+$/, "") || "/";
+
+    const isAnalyseRequest =
+      normalisedPath === "/" ||
+      normalisedPath.endsWith("/analyse-flue-image") ||
+      normalisedPath.endsWith("/ai/analyse-flue-image") ||
+      normalisedPath.endsWith("/api/analyse-flue-image");
+
+    // Handle POST requests for analyse endpoints (with or without trailing slash)
+    if (request.method === "POST" && isAnalyseRequest) {
       const body = await request.json().catch(() => ({}));
 
       return new Response(JSON.stringify({
