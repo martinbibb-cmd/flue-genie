@@ -79,7 +79,7 @@ const aiStatusEl = document.getElementById("aiStatus");
 
 const AI_WORKER_ENDPOINT =
   (typeof window !== "undefined" && window.AI_WORKER_URL) ||
-  "https://your-worker.yourname.workers.dev/analyse-flue-image";
+  "https://survey-brain-api.martinbibb.workers.dev/analyse-flue-image";
 
 // view / camera
 let viewScale = 1;
@@ -297,9 +297,6 @@ bgUpload.addEventListener("change", e => {
     invalidateAIOverlays();
     canvas.width = img.width;
     canvas.height = img.height;
-    canvas.style.width = img.width + "px";
-    canvas.style.height = img.height + "px";
-    canvas.style.maxWidth = "100%";
     viewScale = 1;
     viewOffsetX = 0;
     viewOffsetY = 0;
@@ -353,13 +350,15 @@ function hitCorner(pos, points) {
 
 // ==== DRAW ====
 function draw() {
-  ctx.save();
-  ctx.setTransform(viewScale, 0, 0, viewScale, viewOffsetX, viewOffsetY);
-  ctx.clearRect(-viewOffsetX / viewScale, -viewOffsetY / viewScale,
-                canvas.width / viewScale, canvas.height / viewScale);
-  if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // painted shapes and their corners
+  ctx.setTransform(viewScale, 0, 0, viewScale, viewOffsetX, viewOffsetY);
+
+  if (bgImage) {
+    ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+  }
+
   paintedObjects.forEach(shape => {
     const pts = shape.points;
     if (!pts || pts.length === 0) return;
@@ -385,33 +384,33 @@ function draw() {
       ctx.strokeStyle = colour;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.rect(pt.x - CORNER_SIZE/2, pt.y - CORNER_SIZE/2, CORNER_SIZE, CORNER_SIZE);
+      ctx.rect(pt.x - CORNER_SIZE / 2, pt.y - CORNER_SIZE / 2, CORNER_SIZE, CORNER_SIZE);
       ctx.fill();
       ctx.stroke();
     });
   });
 
-  drawAIOverlays();
-
-  // flue ellipse
   if (flue) {
     ctx.strokeStyle = "red";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.ellipse(flue.x, flue.y, flue.rx, flue.ry, 0, 0, Math.PI*2);
+    ctx.ellipse(flue.x, flue.y, flue.rx, flue.ry, 0, 0, Math.PI * 2);
     ctx.stroke();
 
-    // width handle
     ctx.fillStyle = "white";
     ctx.strokeStyle = "red";
     ctx.beginPath();
-    ctx.rect(flue.x + flue.rx - HANDLE_SIZE/2, flue.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.fill(); ctx.stroke();
-    // height handle
+    ctx.rect(flue.x + flue.rx - HANDLE_SIZE / 2, flue.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.fill();
+    ctx.stroke();
+
     ctx.beginPath();
-    ctx.rect(flue.x - HANDLE_SIZE/2, flue.y + flue.ry - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.fill(); ctx.stroke();
+    ctx.rect(flue.x - HANDLE_SIZE / 2, flue.y + flue.ry - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.fill();
+    ctx.stroke();
   }
+
+  drawAIOverlays();
 
   distanceAnnotations.forEach(a => {
     ctx.font = "12px sans-serif";
@@ -422,7 +421,7 @@ function draw() {
     ctx.fillText(a.text, a.x + 8, a.y - 4);
   });
 
-  ctx.restore();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 
   updateDownloadButtons();
 }
