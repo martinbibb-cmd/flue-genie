@@ -92,10 +92,11 @@ let currentClearances = { ...MANUFACTURER_RULES[currentManufacturerKey].clearanc
 let currentTool = "window";
 let bgImage = null;
 
-// painted objects are POLYLINES: {kind, points:[{x,y},...]}
+const HANDLE_SIZE = 14;
+// painted objects are 2-point lines: {kind, p1:{x,y}, p2:{x,y|null}}
 let paintedObjects = [];
-// currently-being-added polyline (not a separate array entry)
-let activePolyline = null;
+let activeLine = null;
+let draggingHandle = null;
 
 // flue is ELLIPSE
 // { x, y, rx, ry }
@@ -103,9 +104,7 @@ let flue = null;
 let draggingFlue = false;
 let draggingFlueW = false;
 let draggingFlueH = false;
-
 const FLUE_MM = 100; // assume 100mm terminals
-const HANDLE_SIZE = 16;
 
 // ==== INIT UI ====
 function populateManufacturers() {
@@ -144,15 +143,19 @@ document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
     currentTool = btn.dataset.tool;
     document.querySelectorAll("#tools button[data-tool]").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
-    // switching tool ends current polyline
-    activePolyline = null;
+    // switching tool cancels unfinished line
+    if (activeLine && !activeLine.p2) {
+      paintedObjects.pop();
+    }
+    activeLine = null;
   });
 });
 
 // undo
 undoBtn.addEventListener("click", () => {
-  if (activePolyline) {
-    activePolyline = null;
+  if (activeLine && !activeLine.p2) {
+    activeLine = null;
+    paintedObjects.pop();
     draw();
     return;
   }
@@ -256,6 +259,26 @@ function hitFlueHeightHandle(pos) {
   return Math.abs(pos.x - hx) <= HANDLE_SIZE && Math.abs(pos.y - hy) <= HANDLE_SIZE;
 }
 
+function hitHandle(pos, obj) {
+  const half = HANDLE_SIZE / 2;
+  const within = (target) => Math.abs(pos.x - target.x) <= half && Math.abs(pos.y - target.y) <= half;
+  if (within(obj.p1)) return "p1";
+  if (obj.p2 && within(obj.p2)) return "p2";
+  return null;
+}
+
+function snapToHandlePos(pos) {
+  for (let i = paintedObjects.length - 1; i >= 0; i--) {
+    const obj = paintedObjects[i];
+    const which = hitHandle(pos, obj);
+    if (which) {
+      const target = obj[which];
+      return { x: target.x, y: target.y };
+    }
+  }
+  return pos;
+}
+
 // ==== DRAW ====
 function draw() {
   ctx.save();
@@ -264,29 +287,42 @@ function draw() {
                 canvas.width / viewScale, canvas.height / viewScale);
   if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
 
-  // painted polylines
+  // painted 2-point lines and handles
   paintedObjects.forEach(obj => {
-    ctx.strokeStyle = colourForKind(obj.kind);
-    ctx.lineWidth = 6;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
+    const colour = colourForKind(obj.kind);
+    if (obj.p2) {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(obj.p1.x, obj.p1.y);
+      ctx.lineTo(obj.p2.x, obj.p2.y);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    obj.points.forEach((pt, i) => {
-      if (i === 0) ctx.moveTo(pt.x, pt.y);
-      else ctx.lineTo(pt.x, pt.y);
-    });
+    ctx.rect(obj.p1.x - HANDLE_SIZE/2, obj.p1.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.fill();
     ctx.stroke();
+    if (obj.p2) {
+      ctx.beginPath();
+      ctx.rect(obj.p2.x - HANDLE_SIZE/2, obj.p2.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.fill();
+      ctx.stroke();
+    }
   });
 
-  // active polyline (not yet pushed)
-  if (activePolyline) {
-    ctx.strokeStyle = colourForKind(activePolyline.kind);
-    ctx.lineWidth = 6;
+  if (activeLine && !activeLine.p2 && !paintedObjects.includes(activeLine)) {
+    const colour = colourForKind(activeLine.kind);
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    activePolyline.points.forEach((pt, i) => {
-      if (i === 0) ctx.moveTo(pt.x, pt.y);
-      else ctx.lineTo(pt.x, pt.y);
-    });
+    ctx.rect(activeLine.p1.x - HANDLE_SIZE/2, activeLine.p1.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.fill();
     ctx.stroke();
   }
 
@@ -347,6 +383,16 @@ canvas.addEventListener("pointerdown", evt => {
 
   const pos = getCanvasPos(evt);
 
+  // try to grab existing line handle
+  for (let i = paintedObjects.length - 1; i >= 0; i--) {
+    const obj = paintedObjects[i];
+    const which = hitHandle(pos, obj);
+    if (which) {
+      draggingHandle = { objIndex: i, which };
+      return;
+    }
+  }
+
   // try flue first
   if (flue && hitFlueWidthHandle(pos)) {
     draggingFlueW = true;
@@ -372,14 +418,23 @@ canvas.addEventListener("pointerdown", evt => {
     return;
   }
 
-  // polylines: every tap adds a vertex
-  if (!activePolyline || activePolyline.kind !== currentTool) {
-    // start new line and push it immediately so undo works
-    activePolyline = { kind: currentTool, points: [] };
-    paintedObjects.push(activePolyline);
+  const snapped = snapToHandlePos(pos);
+
+  if (!activeLine || activeLine.kind !== currentTool || activeLine.p2) {
+    const newLine = {
+      kind: currentTool,
+      p1: { x: snapped.x, y: snapped.y },
+      p2: null
+    };
+    paintedObjects.push(newLine);
+    activeLine = newLine;
+    draw();
+    return;
   }
-  activePolyline.points.push(pos);
-  draw();
+
+  activeLine.p2 = { x: snapped.x, y: snapped.y };
+  activeLine = null;
+  evaluateAndRender();
 });
 
 canvas.addEventListener("pointermove", evt => {
@@ -413,6 +468,14 @@ canvas.addEventListener("pointermove", evt => {
   }
 
   const pos = getCanvasPos(evt);
+  if (draggingHandle) {
+    const obj = paintedObjects[draggingHandle.objIndex];
+    if (obj) {
+      obj[draggingHandle.which] = { x: pos.x, y: pos.y };
+      evaluateAndRender();
+    }
+    return;
+  }
   if (draggingFlue && flue) {
     flue.x = pos.x;
     flue.y = pos.y;
@@ -440,6 +503,7 @@ canvas.addEventListener("pointerup", evt => {
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
+  draggingHandle = null;
 });
 
 canvas.addEventListener("pointercancel", evt => {
@@ -451,6 +515,7 @@ canvas.addEventListener("pointercancel", evt => {
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
+  draggingHandle = null;
 });
 
 function getPinchDistance() {
@@ -490,18 +555,6 @@ function pointToSegmentDist(px,py,x1,y1,x2,y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
-function distanceEllipseCenterToPolyline(ellipse, poly) {
-  const c = { x: ellipse.x, y: ellipse.y };
-  let min = Infinity;
-  for (let i = 0; i < poly.points.length - 1; i++) {
-    const a = poly.points[i];
-    const b = poly.points[i+1];
-    const d = pointToSegmentDist(c.x, c.y, a.x, a.y, b.x, b.y);
-    if (d < min) min = d;
-  }
-  return min;
-}
-
 function ruleForKind(kind) {
   switch (kind) {
     case "window":
@@ -532,8 +585,8 @@ function evaluateAndRender() {
 
   const rows = [];
   paintedObjects.forEach(obj => {
-    if (!obj.points || obj.points.length < 2) return;
-    const distPx = distanceEllipseCenterToPolyline(flue, obj);
+    if (!obj.p1 || !obj.p2) return;
+    const distPx = pointToSegmentDist(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
     const distMm = distPx / pxPerMm;
     const rule = ruleForKind(obj.kind);
     rows.push({
@@ -550,8 +603,8 @@ function evaluateAndRender() {
     tr.innerHTML = `
       <td>${r.object}</td>
       <td>${r.rule}</td>
-      <td>${r.required}</td>
-      <td>${r.actual}</td>
+      <td>${r.required} mm</td>
+      <td>${r.actual} mm</td>
       <td class="${r.pass ? "pass" : "fail"}">${r.pass ? "✔" : "✖"}</td>
     `;
     resultsBody.appendChild(tr);
@@ -596,8 +649,8 @@ function renderPreviews(pxPerMm) {
   // find closest mm
   let closestMm = Infinity;
   paintedObjects.forEach(obj => {
-    if (!obj.points || obj.points.length < 2) return;
-    const dPx = distanceEllipseCenterToPolyline(flue, obj);
+    if (!obj.p1 || !obj.p2) return;
+    const dPx = pointToSegmentDist(flue.x, flue.y, obj.p1.x, obj.p1.y, obj.p2.x, obj.p2.y);
     const dMm = dPx / pxPerMm;
     if (dMm < closestMm) closestMm = dMm;
   });
