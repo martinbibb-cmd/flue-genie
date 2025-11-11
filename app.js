@@ -182,6 +182,38 @@ const KIND_LABELS = {
   flue: "Flue ellipse"
 };
 
+function getSelectedFlueSizeMm() {
+  const explicit125 = document.getElementById("flueSize125");
+  const explicit100 = document.getElementById("flueSize100");
+
+  if (explicit125 && explicit125.classList.contains("active")) {
+    return 125;
+  }
+  if (explicit100 && explicit100.classList.contains("active")) {
+    return 100;
+  }
+
+  const activeToggle = document.querySelector("[data-flue-size].active");
+  if (activeToggle) {
+    const parsed = Number(activeToggle.getAttribute("data-flue-size"));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return FLUE_MM;
+}
+
+function getFlueRadiusPx(pxPerMmOverride) {
+  if (!flue) return 0;
+  const fluePxDiameter = flue.rx * 2;
+  const pxPerMm = Number.isFinite(pxPerMmOverride) && pxPerMmOverride > 0
+    ? pxPerMmOverride
+    : fluePxDiameter / FLUE_MM;
+  const flueMm = getSelectedFlueSizeMm();
+  return (flueMm / 2) * pxPerMm;
+}
+
 // ==== INIT UI ====
 function populateManufacturers() {
   MANUFACTURERS.forEach(({ value, label }) => {
@@ -959,6 +991,7 @@ function evaluateAndRender() {
 
   const fluePxDiameter = flue.rx * 2;
   const pxPerMm = fluePxDiameter / FLUE_MM;
+  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
   lastPxPerMm = pxPerMm;
 
   paintedObjects.forEach(shape => {
@@ -985,7 +1018,8 @@ function evaluateAndRender() {
       return;
     }
 
-    const distMm = minPx / pxPerMm;
+    const edgePx = Math.max(0, minPx - flueRadiusPx);
+    const distMm = edgePx / pxPerMm;
     const actualRounded = Math.round(distMm);
     const evaluation = {
       shape,
@@ -1051,6 +1085,7 @@ function hasLocalFailures() {
   if (!flue) return false;
   const fluePxDiameter = flue.rx * 2;
   const pxPerMm = fluePxDiameter / FLUE_MM;
+  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
   for (const shape of paintedObjects) {
     if (!shape.points || shape.points.length < 2) continue;
     let minPx = Infinity;
@@ -1061,7 +1096,8 @@ function hasLocalFailures() {
       if (d < minPx) minPx = d;
     }
     const rule = ruleForKind(shape.kind);
-    const mm = minPx / pxPerMm;
+    const edgePx = Math.max(0, minPx - flueRadiusPx);
+    const mm = edgePx / pxPerMm;
     if (mm < rule.mm) return true;
   }
   return false;
@@ -1300,6 +1336,8 @@ function renderPreviews(pxPerMm) {
   }
 }
 function getGlobalMinMm(x, y, pxPerMm) {
+  if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) return Infinity;
+  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
   let minMm = Infinity;
   paintedObjects.forEach(shape => {
     if (!shape.points || shape.points.length < 2) return;
@@ -1310,7 +1348,8 @@ function getGlobalMinMm(x, y, pxPerMm) {
       const d = pointToSegmentDist(x, y, a.x, a.y, b.x, b.y);
       if (d < minPx) minPx = d;
     }
-    const mm = minPx / pxPerMm;
+    const edgePx = Math.max(0, minPx - flueRadiusPx);
+    const mm = edgePx / pxPerMm;
     if (mm < minMm) minMm = mm;
   });
   return minMm;
@@ -1330,6 +1369,8 @@ function findBetterX(startX, y, pxPerMm, currentMinMm) {
 }
 
 function positionSatisfiesAll(x, y, pxPerMm) {
+  if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) return false;
+  const flueRadiusPx = getFlueRadiusPx(pxPerMm);
   for (const shape of paintedObjects) {
     if (!shape.points || shape.points.length < 2) continue;
     let minPx = Infinity;
@@ -1340,7 +1381,8 @@ function positionSatisfiesAll(x, y, pxPerMm) {
       if (d < minPx) minPx = d;
     }
     const rule = ruleForKind(shape.kind);
-    const mm = minPx / pxPerMm;
+    const edgePx = Math.max(0, minPx - flueRadiusPx);
+    const mm = edgePx / pxPerMm;
     if (mm < rule.mm) {
       return false;
     }
@@ -1458,7 +1500,16 @@ function buildAIPayload({ includeMarks = true } = {}) {
   };
 
   if (flue) {
-    payload.flue = { x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry };
+    const fluePxDiameter = flue.rx * 2;
+    const pxPerMm = fluePxDiameter / FLUE_MM;
+    payload.flue = {
+      x: flue.x,
+      y: flue.y,
+      rx: flue.rx,
+      ry: flue.ry,
+      radiusPx: getFlueRadiusPx(pxPerMm),
+      sizeMm: getSelectedFlueSizeMm()
+    };
   }
 
   if (includeMarks) {
