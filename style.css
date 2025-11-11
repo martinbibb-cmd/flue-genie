@@ -27,7 +27,13 @@ main {
   max-width: none;
   touch-action: none; /* important for iOS */
 }
-#tools button { 
+.download-actions {
+  margin-top: 6px;
+}
+.download-actions button {
+  width: 100%;
+}
+#tools button {
   display: block;
   width: 100%;
   margin-bottom: 4px;
