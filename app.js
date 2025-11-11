@@ -24,6 +24,33 @@ const RULE_SETS = {
   }
 };
 
+let pxPerMm = 1; // default, will be recalculated
+
+function updateScaleFromFlue(flueShape) {
+  const calibInput = document.getElementById("calibValue");
+  const knownMM = calibInput ? Number(calibInput.value) || 100 : 100;
+
+  if (!flueShape) return;
+
+  let widthPx = null;
+  if (typeof flueShape.width === "number") {
+    widthPx = flueShape.width;
+  } else if (typeof flueShape.rx === "number") {
+    widthPx = flueShape.rx * 2;
+  } else if (typeof flueShape.ry === "number") {
+    widthPx = flueShape.ry * 2;
+  }
+
+  if (
+    Number.isFinite(widthPx) &&
+    widthPx > 0 &&
+    Number.isFinite(knownMM) &&
+    knownMM > 0
+  ) {
+    pxPerMm = widthPx / knownMM;
+  }
+}
+
 // ==== DOM ====
 const canvas = document.getElementById("sceneCanvas");
 const ctx = canvas.getContext("2d");
@@ -31,6 +58,7 @@ const manufacturerSelect = document.getElementById("manufacturerSelect");
 const resultsBody = document.querySelector("#resultsTable tbody");
 const bgUpload = document.getElementById("bgUpload");
 const undoBtn = document.getElementById("undoBtn");
+const calibInput = document.getElementById("calibValue");
 const optACanvas = document.getElementById("optA");
 const optACTX = optACanvas.getContext("2d");
 const optBCanvas = document.getElementById("optB");
@@ -295,6 +323,14 @@ const KIND_LABELS = {
 };
 
 function getSelectedFlueSizeMm() {
+  const calibInput = document.getElementById("calibValue");
+  if (calibInput) {
+    const manual = Number(calibInput.value);
+    if (Number.isFinite(manual) && manual > 0) {
+      return manual;
+    }
+  }
+
   const explicit125 = document.getElementById("flueSize125");
   const explicit100 = document.getElementById("flueSize100");
 
@@ -318,11 +354,8 @@ function getSelectedFlueSizeMm() {
 
 function getPxPerMm() {
   if (!flue) return null;
-  const fluePxDiameter = flue.rx * 2;
-  const flueSizeMm = getSelectedFlueSizeMm();
-  if (!Number.isFinite(fluePxDiameter) || fluePxDiameter <= 0) return null;
-  if (!Number.isFinite(flueSizeMm) || flueSizeMm <= 0) return null;
-  return fluePxDiameter / flueSizeMm;
+  updateScaleFromFlue(flue);
+  return Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : null;
 }
 
 function getFlueRadiusPx() {
@@ -389,9 +422,8 @@ undoBtn.addEventListener("click", () => {
   }
   if (flue) {
     flue = null;
-    resultsBody.innerHTML = "";
     invalidateAIOverlays();
-    draw();
+    evaluateAndRender();
   }
 });
 
@@ -432,6 +464,13 @@ manufacturerSelect.addEventListener("change", () => {
   currentRules = { ...RULE_SETS.fan };
   evaluateAndRender();
 });
+
+if (calibInput) {
+  calibInput.addEventListener("input", () => {
+    updateScaleFromFlue(flue);
+    evaluateAndRender();
+  });
+}
 
 // image upload
 bgUpload.addEventListener("change", e => {
@@ -762,10 +801,14 @@ function renderSuggestions() {
   const sorted = [...measurementResults].sort((a, b) => Number(a.pass) - Number(b.pass));
   sorted.forEach(result => {
     const li = document.createElement("li");
+    const actualText =
+      Number.isFinite(result.actual) && result.actual != null
+        ? `${result.actual}mm`
+        : "–";
     if (result.pass) {
-      li.textContent = `${result.label} OK – ${result.actual}mm clear ≥ ${result.required}mm required.`;
+      li.textContent = `${result.label} OK – ${actualText} clear ≥ ${result.required}mm required.`;
     } else {
-      li.textContent = `${result.label}: move to ≥${result.required}mm clear (currently ${result.actual}mm clear).`;
+      li.textContent = `${result.label}: move to ≥${result.required}mm clear (currently ${actualText} clear).`;
     }
     aiList.appendChild(li);
   });
@@ -783,7 +826,9 @@ function getRemedyMessage() {
   let worst = null;
   measurementResults.forEach(result => {
     if (result.pass) return;
-    const deficit = result.required - result.actualMm;
+    const deficit = Number.isFinite(result.actualMm)
+      ? result.required - result.actualMm
+      : result.required;
     if (!worst || deficit > worst.deficit) {
       worst = { result, deficit };
     }
@@ -1086,34 +1131,120 @@ function formatObjectLabel(kind) {
     .replace(/\b\w/g, chr => chr.toUpperCase());
 }
 
-function evaluateAndRender() {
+function labelForKind(kind) {
+  if (KIND_LABELS[kind]) {
+    return KIND_LABELS[kind];
+  }
+  return formatObjectLabel(kind);
+}
+
+function ruleNameForKind(kind) {
+  const rule = FAN_RULES[kind];
+  if (rule && rule.label) {
+    return rule.label;
+  }
+  return formatObjectLabel(kind);
+}
+
+function requiredForKind(kind, rules) {
+  if (!rules) return 300;
+  switch (kind) {
+    case "window-opening":
+      return rules.windowOpening;
+    case "window-fabric":
+      return rules.windowFabric;
+    case "gutter":
+      return rules.gutter;
+    case "eaves":
+      return rules.eaves;
+    case "boundary":
+      return rules.boundary;
+    default:
+      return rules.windowOpening ?? 300;
+  }
+}
+
+function distanceFromFlueToShape(flueShape, shape) {
+  if (!flueShape || !shape || !Array.isArray(shape.points) || shape.points.length < 2) {
+    return { distancePx: null, closestPoint: null };
+  }
+
+  let minPx = Infinity;
+  let closestPoint = null;
+
+  forEachShapeSegment(shape.points, (a, b) => {
+    const distPx = pointToSegmentDist(flueShape.x, flueShape.y, a.x, a.y, b.x, b.y);
+    if (distPx < minPx) {
+      minPx = distPx;
+      closestPoint = closestPointOnSegment(flueShape.x, flueShape.y, a.x, a.y, b.x, b.y);
+    }
+  });
+
+  if (!Number.isFinite(minPx)) {
+    return { distancePx: null, closestPoint: null };
+  }
+
+  const radii = [];
+  if (Number.isFinite(flueShape.rx) && flueShape.rx > 0) radii.push(flueShape.rx);
+  if (Number.isFinite(flueShape.ry) && flueShape.ry > 0) radii.push(flueShape.ry);
+  const radius = radii.length ? Math.min(...radii) : 0;
+  const edgePx = Math.max(0, minPx - radius);
+
+  return { distancePx: edgePx, closestPoint };
+}
+
+function renderResultsTable(rows, { emptyMessage } = {}) {
   if (!resultsBody) return;
   resultsBody.innerHTML = "";
+
+  if (!rows || rows.length === 0) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.className = "empty";
+    emptyRow.innerHTML = `<td colspan="6">${emptyMessage || "Mark nearby objects to measure clearances."}</td>`;
+    resultsBody.appendChild(emptyRow);
+    return;
+  }
+
+  rows.forEach((row, index) => {
+    const tr = document.createElement("tr");
+    tr.className = row.ok ? "pass-row" : "fail-row";
+    const actualCell =
+      row.actualMM != null && Number.isFinite(row.actualMM)
+        ? `${row.actualMM.toFixed(0)} mm`
+        : "–";
+    tr.innerHTML = `
+      <td>${index + 1}</td>
+      <td>${row.object}</td>
+      <td>${row.rule}</td>
+      <td>${row.requiredMM} mm</td>
+      <td>${actualCell}</td>
+      <td>${row.ok ? "✅" : "❌"}</td>
+    `;
+    resultsBody.appendChild(tr);
+  });
+}
+
+function recomputeClearancesAndRender() {
+  if (!resultsBody) return;
+
+  const rows = [];
   measurementResults = [];
   distanceAnnotations = [];
   safetyZones = [];
 
   if (!flue) {
     lastPxPerMm = null;
-    const emptyRow = document.createElement("tr");
-    emptyRow.className = "empty";
-    emptyRow.innerHTML = '<td colspan="5">Add a flue and marks to see clearances.</td>';
-    resultsBody.appendChild(emptyRow);
+    renderResultsTable([], { emptyMessage: "Add a flue and marks to see clearances." });
     draw();
     renderSuggestions();
     return;
   }
 
-  const pxPerMm = getPxPerMm();
-  if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) {
-    draw();
-    renderSuggestions();
-    return;
-  }
-  const flueRadiusPx = getFlueRadiusPx();
-  lastPxPerMm = pxPerMm;
+  updateScaleFromFlue(flue);
+  const activePxPerMm = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : null;
+  lastPxPerMm = activePxPerMm || null;
 
-  let rowIndex = 1;
+  const rules = currentRules || RULE_SETS.fan;
 
   paintedObjects.forEach(shape => {
     const pts = shape.points;
@@ -1122,34 +1253,25 @@ function evaluateAndRender() {
       return;
     }
 
-    const rule = ruleForKind(shape.kind);
-    let minPx = Infinity;
-    let closestPoint = null;
-
-    forEachShapeSegment(pts, (a, b) => {
-      const distPx = pointToSegmentDist(flue.x, flue.y, a.x, a.y, b.x, b.y);
-      if (distPx < minPx) {
-        minPx = distPx;
-        closestPoint = closestPointOnSegment(flue.x, flue.y, a.x, a.y, b.x, b.y);
-      }
-    });
-
-    if (!isFinite(minPx)) {
+    const { distancePx, closestPoint } = distanceFromFlueToShape(flue, shape);
+    if (distancePx == null) {
       shape._evaluation = null;
       return;
     }
 
-    const edgePx = Math.max(0, minPx - flueRadiusPx);
-    const distMm = edgePx / pxPerMm;
-    const actualRounded = Math.round(distMm);
-    const pass = distMm >= rule.mm;
+    const required = requiredForKind(shape.kind, rules);
+    const actualMM =
+      activePxPerMm && Number.isFinite(distancePx) ? distancePx / activePxPerMm : null;
+    const pass = actualMM != null ? actualMM >= required : false;
+    const actualRounded = actualMM != null ? Math.round(actualMM) : null;
+
     const evaluation = {
       shape,
       kind: shape.kind,
-      label: rule.label,
-      required: rule.mm,
+      label: ruleNameForKind(shape.kind),
+      required,
       actual: actualRounded,
-      actualMm: distMm,
+      actualMm: actualMM,
       pass,
       closestPoint
     };
@@ -1157,47 +1279,50 @@ function evaluateAndRender() {
     measurementResults.push(evaluation);
     shape._evaluation = evaluation;
 
-    safetyZones.push({
-      type: "circle",
-      cx: flue.x,
-      cy: flue.y,
-      r: rule.mm * pxPerMm,
-      color: pass ? "rgba(0,200,0,0.05)" : "rgba(255,0,0,0.12)",
-      label: `${rule.label} (${rule.mm}mm)`
-    });
-    const tr = document.createElement("tr");
-    tr.className = pass ? "pass-row" : "fail-row";
-    tr.innerHTML = `
-      <td>${rowIndex}</td>
-      <td>${rule.label}</td>
-      <td>${rule.mm}</td>
-      <td>${actualRounded}</td>
-      <td class="status ${pass ? "pass" : "fail"}">${pass ? "✔" : "✖"}</td>
-    `;
-    resultsBody.appendChild(tr);
-
-    if (closestPoint) {
-      distanceAnnotations.push({
-        x: closestPoint.x,
-        y: closestPoint.y,
-        text: `#${rowIndex}: ${actualRounded}mm / ${rule.mm}mm`,
-        color: pass ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.95)"
+    if (activePxPerMm && Number.isFinite(required)) {
+      safetyZones.push({
+        type: "circle",
+        cx: flue.x,
+        cy: flue.y,
+        r: required * activePxPerMm,
+        color: pass ? "rgba(0,200,0,0.05)" : "rgba(255,0,0,0.12)",
+        label: `${ruleNameForKind(shape.kind)} (${required}mm)`
       });
     }
 
-    rowIndex += 1;
+    const rowNumber = rows.length + 1;
+    rows.push({
+      object: labelForKind(shape.kind),
+      rule: ruleNameForKind(shape.kind),
+      requiredMM: required,
+      actualMM,
+      ok: pass
+    });
+
+    if (closestPoint) {
+      const actualText = actualRounded != null ? `${actualRounded}mm` : "–";
+      distanceAnnotations.push({
+        x: closestPoint.x,
+        y: closestPoint.y,
+        text: `#${rowNumber}: ${actualText} / ${required}mm`,
+        color: pass ? "rgba(34,197,94,0.9)" : "rgba(239,68,68,0.95)"
+      });
+    }
   });
 
-  if (measurementResults.length === 0) {
-    const emptyRow = document.createElement("tr");
-    emptyRow.className = "empty";
-    emptyRow.innerHTML = '<td colspan="5">Mark nearby objects to measure clearances.</td>';
-    resultsBody.appendChild(emptyRow);
+  if (rows.length === 0) {
+    renderResultsTable([], { emptyMessage: "Mark nearby objects to measure clearances." });
+  } else {
+    renderResultsTable(rows);
   }
 
   draw();
-  renderPreviews(pxPerMm);
+  renderPreviews(activePxPerMm);
   renderSuggestions();
+}
+
+function evaluateAndRender() {
+  recomputeClearancesAndRender();
   setAIStatus(getRemedyMessage());
 }
 
@@ -1693,29 +1818,29 @@ async function runAI({ includeMarks = true, button } = {}) {
 
   try {
     const result = await analyseImageWithAI(payload);
-    let areas = Array.isArray(result?.areas) ? result.areas : [];
-    areas = filterAiAreas(areas, canvas, ctx);
+    const rawAreas = Array.isArray(result?.areas) ? result.areas : [];
+    const filteredAreas = filterAiAreas(rawAreas, canvas, ctx);
 
     if (result && result.error) {
       setAIStatus("AI error from worker – showing your marks only.", { isError: true });
       aiOverlays = buildOverlaysFromUserMarks();
-    } else if (areas.length === 0) {
-      setAIStatus("AI didn’t detect objects – using your marks.");
+    } else if (!result || !Array.isArray(result.areas) || result.areas.length === 0 || filteredAreas.length === 0) {
+      setAIStatus("AI worker returned no areas – using your marks instead.");
       aiOverlays = buildOverlaysFromUserMarks();
     } else {
-      aiOverlays = normaliseAIResult({ areas });
+      aiOverlays = normaliseAIResult({ areas: filteredAreas });
       const message = `AI detected ${aiOverlays.length} object${aiOverlays.length === 1 ? "" : "s"}.`;
       setAIStatus(message);
     }
 
+    recomputeClearancesAndRender();
     renderLegendFromAI(aiOverlays);
-    draw();
   } catch (err) {
     console.error("AI analysis failed", err);
     setAIStatus("AI error from worker – showing your marks only.", { isError: true });
     aiOverlays = buildOverlaysFromUserMarks();
+    recomputeClearancesAndRender();
     renderLegendFromAI(aiOverlays);
-    draw();
   } finally {
     if (button) {
       button.disabled = false;

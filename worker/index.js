@@ -53,6 +53,21 @@ function labelForKind(kind) {
 
 function buildAreas(body) {
   const areas = [];
+
+  const shapes = Array.isArray(body.shapes) ? body.shapes : [];
+  shapes.forEach(shape => {
+    const pts = toPointArray(shape.points);
+    if (pts.length >= 2) {
+      areas.push({
+        type: pts.length > 2 ? "polygon" : "line",
+        label: labelForKind(shape.kind),
+        kind: shape.kind,
+        zone: "alert",
+        points: pts
+      });
+    }
+  });
+
   const roughPoints = toPointArray(body.rough);
   if (roughPoints.length >= 2) {
     const bounds = boundsForPoints(roughPoints);
@@ -60,28 +75,12 @@ function buildAreas(body) {
     if (polygon.length) {
       areas.push({
         type: "polygon",
-        label: "Window (rough)",
+        label: "Rough area",
+        kind: "rough",
         zone: "alert",
-        confidence: 0.6,
         points: polygon
       });
     }
-  }
-
-  if (body.mode === "detect-only" && areas.length === 0) {
-    const shapes = Array.isArray(body.shapes) ? body.shapes : [];
-    shapes.forEach(shape => {
-      const pts = toPointArray(shape.points);
-      if (pts.length >= 3) {
-        areas.push({
-          type: "polygon",
-          label: labelForKind(shape.kind),
-          zone: "alert",
-          confidence: 0.5,
-          points: pts
-        });
-      }
-    });
   }
 
   return areas;

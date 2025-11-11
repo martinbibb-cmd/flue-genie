@@ -11,10 +11,10 @@
     <aside id="sidebar">
       <h2>Flue Genie</h2>
 
-      <label class="upload-label">
-        Upload photo
+      <div class="upload-block">
+        <label for="bgUpload">1. Upload wall photo</label>
         <input type="file" id="bgUpload" accept="image/*">
-      </label>
+      </div>
 
       <label>
         Boiler type
@@ -27,6 +27,9 @@
         Manufacturer / set
         <select id="manufacturerSelect"></select>
       </label>
+
+      <label for="calibValue">Known flue OD (mm)</label>
+      <input id="calibValue" type="number" value="100" min="40" max="200" step="1">
 
       <div id="instructions">
         <p>1. Upload the wall photo.</p>
@@ -71,6 +74,7 @@
           <thead>
             <tr>
               <th>#</th>
+              <th>Object</th>
               <th>Rule</th>
               <th>Required (mm)</th>
               <th>Actual (mm)</th>
@@ -79,7 +83,7 @@
           </thead>
           <tbody>
             <tr class="empty">
-              <td colspan="5">Add a flue and marks to see clearances.</td>
+              <td colspan="6">Add a flue and marks to see clearances.</td>
             </tr>
           </tbody>
         </table>

@@ -26,15 +26,18 @@ body {
   letter-spacing: -0.01em;
 }
 
-.upload-label {
-  display: block;
+.upload-block {
   margin-bottom: 10px;
-  font-weight: 600;
 }
 
-#bgUpload {
+.upload-block label {
   display: block;
-  margin-top: 4px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.upload-block input[type="file"] {
+  width: 100%;
 }
 
 #sidebar label {
@@ -50,6 +53,14 @@ body {
   border-radius: 6px;
   border: 1px solid #cbd5e1;
   font-size: 14px;
+}
+
+#sidebar input[type="number"] {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+  box-sizing: border-box;
 }
 
 #instructions {
