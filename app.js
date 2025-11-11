@@ -226,6 +226,7 @@ bgUpload.addEventListener("change", e => {
     canvas.height = img.height;
     canvas.style.width = img.width + "px";
     canvas.style.height = img.height + "px";
+    canvas.style.maxWidth = "100%";
     viewScale = 1;
     viewOffsetX = 0;
     viewOffsetY = 0;
