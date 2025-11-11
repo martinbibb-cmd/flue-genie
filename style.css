@@ -12,12 +12,12 @@ body {
 }
 
 #sidebar {
-  width: 280px;
-  border-right: 1px solid #d4d7dc;
-  padding: 16px;
+  width: 260px;
   overflow-y: auto;
-  background: #fff;
+  padding: 10px;
+  background: #fafafa;
   box-sizing: border-box;
+  border-right: 1px solid #d4d7dc;
 }
 
 #sidebar h2 {
@@ -27,19 +27,14 @@ body {
 }
 
 .upload-label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 12px 0;
+  display: block;
+  margin-bottom: 10px;
   font-weight: 600;
-  color: #0b7285;
 }
 
-.upload-label input[type="file"] {
-  border: 1px dashed #0b7285;
-  border-radius: 6px;
-  padding: 12px;
-  background: rgba(11, 114, 133, 0.08);
+#bgUpload {
+  display: block;
+  margin-top: 4px;
 }
 
 #sidebar label {
@@ -154,49 +149,32 @@ body {
 
 main {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px;
+  padding: 10px;
   overflow-y: auto;
+  max-height: 100vh;
   box-sizing: border-box;
-  position: relative;
 }
 
 #resultsPanel {
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(6px);
-  padding: 12px;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-  position: sticky;
-  top: 0;
-  z-index: 5;
+  margin-top: 12px;
 }
 
 #resultsPanel h3 {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   font-size: 18px;
 }
 
 #resultsTable {
-  width: 100%;
+  margin-top: 12px;
   border-collapse: collapse;
+  width: 100%;
+}
+
+#resultsTable th,
+#resultsTable td {
+  border: 1px solid #ddd;
+  padding: 4px 6px;
   font-size: 13px;
-}
-
-#resultsTable thead th {
-  background: #0f172a;
-  color: #fff;
-  font-weight: 600;
-  padding: 6px;
-  position: sticky;
-  top: 0;
-}
-
-#resultsTable tbody td {
-  border-bottom: 1px solid #e2e8f0;
-  padding: 6px;
 }
 
 #resultsTable tr.fail-row {
@@ -212,52 +190,44 @@ main {
   text-align: center;
 }
 
+#resultsTable td.status.pass {
+  background: #d4f7d4;
+}
+
+#resultsTable td.status.fail {
+  background: #f9d0d0;
+}
+
 #resultsTable tr.empty td {
   text-align: center;
   color: #64748b;
 }
 
 #canvasWrapper {
-  padding: 12px;
-  background: #fff;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12);
+  display: inline-block;
+  padding: 8px;
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  max-width: 100%;
+  max-height: 60vh;
   overflow: auto;
-  max-height: calc(100vh - 220px);
 }
 
 #sceneCanvas {
   display: block;
-  max-width: 100%;
-  height: auto;
 }
 
 #legend {
-  background: #fff;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  padding: 12px;
+  margin-top: 8px;
   font-size: 13px;
-  color: #0f172a;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 }
 
 #legend:empty {
   display: none;
 }
 
-#legend h3 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-
-#legend ol {
-  margin: 0;
-  padding-left: 20px;
-}
-
-#legend li + li {
+#legend div + div {
   margin-top: 4px;
 }
 
