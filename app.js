@@ -118,6 +118,92 @@ function normaliseAiPoints(points = []) {
     .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
 }
 
+function filterAiAreas(areas, canvasEl, canvasCtx) {
+  if (!areas || !areas.length) return [];
+
+  const MIN_SIZE = 28;
+  const MIN_VARIANCE = 12;
+  const MERGE_DIST = 32;
+
+  let imgData = null;
+  try {
+    if (canvasEl && canvasCtx) {
+      imgData = canvasCtx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+    }
+  } catch (e) {
+    // ignore — typically cross-origin; fall back to size filter only
+  }
+
+  function getBox(area) {
+    if (!area.points || !area.points.length) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    area.points.forEach(pt => {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.y < minY) minY = pt.y;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.y > maxY) maxY = pt.y;
+    });
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  }
+
+  function hasTexture(box) {
+    if (!imgData) return true;
+    const { minX, minY, maxX, maxY } = box;
+    const samples = 12;
+    const values = [];
+    for (let i = 0; i < samples; i++) {
+      const x = Math.floor(minX + Math.random() * (maxX - minX));
+      const y = Math.floor(minY + Math.random() * (maxY - minY));
+      if (x < 0 || y < 0 || x >= imgData.width || y >= imgData.height) continue;
+      const idx = (y * imgData.width + x) * 4;
+      const r = imgData.data[idx];
+      const g = imgData.data[idx + 1];
+      const b = imgData.data[idx + 2];
+      const luma = (r + g + b) / 3;
+      values.push(luma);
+    }
+    if (!values.length) return false;
+    const avg = values.reduce((sum, val) => sum + val, 0) / values.length;
+    const variance =
+      values.reduce((sum, val) => sum + Math.abs(val - avg), 0) / values.length;
+    return variance >= MIN_VARIANCE;
+  }
+
+  let filtered = areas.filter(area => {
+    const box = getBox(area);
+    if (!box) return false;
+    if (box.w < MIN_SIZE && box.h < MIN_SIZE) return false;
+    if (!hasTexture(box)) return false;
+    return true;
+  });
+
+  filtered.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+  const final = [];
+  filtered.forEach(area => {
+    const boxA = getBox(area);
+    if (!boxA) return;
+    const ax = (boxA.minX + boxA.maxX) / 2;
+    const ay = (boxA.minY + boxA.maxY) / 2;
+    const tooClose = final.some(other => {
+      const boxB = getBox(other);
+      if (!boxB) return false;
+      const bx = (boxB.minX + boxB.maxX) / 2;
+      const by = (boxB.minY + boxB.maxY) / 2;
+      const dx = ax - bx;
+      const dy = ay - by;
+      return Math.sqrt(dx * dx + dy * dy) < MERGE_DIST;
+    });
+    if (!tooClose) {
+      final.push(area);
+    }
+  });
+
+  return final;
+}
+
 function mapAiLabelToKind(label = "") {
   const l = String(label || "").toLowerCase();
   if (l.includes("fabric")) return "window-fabric";
@@ -1438,7 +1524,9 @@ async function runAutoDetect() {
 
   try {
     const result = await analyseImageWithAI(payload);
-    const added = applyAiAreasToPaintedObjects(result?.areas, {
+    let areas = Array.isArray(result?.areas) ? result.areas : [];
+    areas = filterAiAreas(areas, canvas, ctx);
+    const added = applyAiAreasToPaintedObjects(areas, {
       replaceExisting: true,
       source: "ai-detect"
     });
@@ -1489,7 +1577,9 @@ async function runRoughBrushCleanup() {
     payload.rough = roughStrokes.map(pt => ({ x: pt.x, y: pt.y }));
 
     const result = await analyseImageWithAI(payload);
-    const added = applyAiAreasToPaintedObjects(result?.areas, {
+    let areas = Array.isArray(result?.areas) ? result.areas : [];
+    areas = filterAiAreas(areas, canvas, ctx);
+    const added = applyAiAreasToPaintedObjects(areas, {
       replaceExisting: true,
       source: "ai-rough"
     });
@@ -1600,16 +1690,17 @@ async function runAI({ includeMarks = true, button } = {}) {
 
   try {
     const result = await analyseImageWithAI(payload);
-    const rawAreas = Array.isArray(result?.areas) ? result.areas : [];
+    let areas = Array.isArray(result?.areas) ? result.areas : [];
+    areas = filterAiAreas(areas, canvas, ctx);
 
     if (result && result.error) {
       setAIStatus(`AI error: ${JSON.stringify(result.error)}`, { isError: true });
       aiOverlays = buildOverlaysFromUserMarks();
-    } else if (rawAreas.length === 0) {
+    } else if (areas.length === 0) {
       setAIStatus("AI returned nothing, using your marks.");
       aiOverlays = buildOverlaysFromUserMarks();
     } else {
-      aiOverlays = normaliseAIResult({ areas: rawAreas });
+      aiOverlays = normaliseAIResult({ areas });
       const message = `AI highlighted ${aiOverlays.length} area${aiOverlays.length === 1 ? "" : "s"}. Move flue or plume as indicated.`;
       setAIStatus(message);
     }
