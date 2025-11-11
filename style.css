@@ -31,8 +31,9 @@ main {
 }
 #sceneCanvas {
   display: block;
-  /* allow the browser to scroll unless JS decides to prevent it */
-  max-width: 100%;
+  width: auto;
+  height: auto;
+  max-width: none;
 }
 .download-actions {
   margin-top: 6px;
