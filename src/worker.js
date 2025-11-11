@@ -13,35 +13,27 @@ export default {
       });
     }
 
-    // accept POST to / and /analyse-flue-image
+    // main endpoint
     if (
       request.method === "POST" &&
       (url.pathname === "/" || url.pathname === "/analyse-flue-image")
     ) {
       const body = await request.json().catch(() => ({}));
+      const imageDataUrl = body.image;
+      const measurements = body.measurements || [];
+      const mode = body.mode || "zones";
 
-      const imageDataUrl = body.image; // canvas.toDataURL(...) from your app
-      const measurements = body.measurements; // you added this on the frontend
-      const rules = body.rules || {};
-
-      // If no image, just return empty
+      // no image → return empty
       if (!imageDataUrl) {
-        return new Response(JSON.stringify({ areas: [] }), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          }
-        });
+        return json({ areas: [], error: "no-image" });
       }
 
-      // call OpenAI
       try {
-        const oaRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${env.OPENAI_API_KEY}`
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`
           },
           body: JSON.stringify({
             model: "gpt-4o-mini",
@@ -50,10 +42,9 @@ export default {
               {
                 role: "system",
                 content:
-                  "You detect building features that affect boiler flue clearances. " +
-                  "Return JSON with an array named 'areas'. Each area must have: " +
-                  "{type: 'polygon'|'line', label: string, points: [{x,y}...], confidence: number} " +
-                  "Coordinates must be in the SAME pixel space as the supplied image."
+                  "You detect building elements that affect boiler flue clearances: window openings, doors, gutters/downpipes, eaves/soffits, and near-wall obstructions. " +
+                  "Return ONLY JSON of the form {\"areas\":[...]} where each area has: " +
+                  "{type:'polygon'|'line', label:string, zone:'no-go'|'safe'|'plume', points:[{x,y}...], confidence:number}."
               },
               {
                 role: "user",
@@ -61,16 +52,11 @@ export default {
                   {
                     type: "text",
                     text:
-                      "Find nearby openings (windows/doors), gutters/pipes, eaves/soffits, " +
-                      "and anything else the flue has to clear. " +
-                      "If the flue is clearly too close to something, add an area for it."
-                  },
-                  {
-                    type: "text",
-                    text:
-                      "Existing app measurements (actual vs required): " +
-                      JSON.stringify(measurements || []) +
-                      ". Use these to prioritise which areas to return."
+                      mode === "detect-only"
+                        ? "Detect and label windows/doors, gutters/downpipes, and eaves in this photo."
+                        : "Highlight parts of this photo that are too close to the flue. These are the local app measurements (actual < required means it failed): " +
+                          JSON.stringify(measurements) +
+                          ". Mark those as 'no-go'. If a plume kit could solve it, mark that area as 'plume'."
                   },
                   {
                     type: "image_url",
@@ -82,47 +68,39 @@ export default {
           })
         });
 
-        const oaJson = await oaRes.json();
+        const jsonRes = await res.json();
 
-        // Expect model to return a JSON object
-        const content = oaJson.choices?.[0]?.message?.content;
-        const parsed = typeof content === "string" ? JSON.parse(content) : content;
+        if (!res.ok) {
+          // show the actual error to the frontend
+          return json({ areas: [], error: jsonRes });
+        }
 
-        // Normalize: ensure we always return { areas: [...] }
-        const areas = Array.isArray(parsed?.areas) ? parsed.areas : [];
+        const content = jsonRes?.choices?.[0]?.message?.content;
+        let parsed;
+        try {
+          parsed = typeof content === "string" ? JSON.parse(content) : content || {};
+        } catch (_e) {
+          parsed = { areas: [] };
+        }
 
-        return new Response(JSON.stringify({ areas }), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          }
-        });
+        const areas = Array.isArray(parsed.areas) ? parsed.areas : [];
+        return json({ areas });
       } catch (err) {
-        // fallback: return empty but with error message
-        return new Response(
-          JSON.stringify({
-            areas: [],
-            error: String(err)
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*"
-            }
-          }
-        );
+        return json({ areas: [], error: String(err) });
       }
     }
 
     // unknown route
-    return new Response(JSON.stringify({ error: "Unknown endpoint" }), {
-      status: 404,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*"
-      }
-    });
+    return new Response("Not found", { status: 404 });
   }
 };
+
+function json(obj) {
+  return new Response(JSON.stringify(obj), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*"
+    }
+  });
+}
