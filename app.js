@@ -267,11 +267,9 @@ if (aiHighlightBtn) {
         aiList.innerHTML = "";
         aiOverlays.forEach((a, i) => {
           const li = document.createElement("li");
-          const confText =
-            typeof a.confidence === "number"
-              ? ` (${Math.round(a.confidence * 100)}%)`
-              : "";
-          li.textContent = `${i + 1}. ${a.label || "Area"}${confText}`;
+          li.textContent = `${i + 1}. ${formatAiAreaLabel(a, {
+            fallback: "Area"
+          })}`;
           aiList.appendChild(li);
         });
       }
@@ -461,6 +459,18 @@ function colourForKind(kind) {
   }
 }
 
+function formatAiAreaLabel(area, { fallback = "AI area" } = {}) {
+  const baseLabel =
+    area && typeof area.label === "string" && area.label.trim().length > 0
+      ? area.label
+      : fallback;
+  const conf =
+    area && typeof area.confidence === "number"
+      ? ` (${Math.round(area.confidence * 100)}%)`
+      : "";
+  return `${baseLabel}${conf}`;
+}
+
 function drawAIOverlays() {
   if (!aiOverlays || aiOverlays.length === 0) return;
 
@@ -513,13 +523,7 @@ function drawAIOverlays() {
     }
 
     if (labelPoint) {
-      const conf =
-        typeof areaWithPoints.confidence === "number"
-          ? ` (${Math.round(areaWithPoints.confidence * 100)}%)`
-          : "";
-      const txt = areaWithPoints.label
-        ? areaWithPoints.label + conf
-        : "AI area" + conf;
+      const txt = formatAiAreaLabel(areaWithPoints);
 
       ctx.font = "12px sans-serif";
       const textWidth = ctx.measureText(txt).width;
