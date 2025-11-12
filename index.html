@@ -1,144 +1,84 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Flue checker</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="style.css" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flue Genie — Paint & Check</title>
+<link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="app">
-    <aside id="sidebar">
-      <h2>Flue Genie</h2>
-
-      <div class="upload-block">
-        <label for="bgUpload">1. Upload wall photo</label>
-        <input type="file" id="bgUpload" accept="image/*">
-      </div>
-
-      <label>
-        Boiler type
-        <select id="boilerType">
-          <option value="fan" selected>Fan-assisted / room-sealed</option>
+  <header>
+    <h1>Flue Genie</h1>
+    <div class="row">
+      <label>Brand
+        <select id="brand">
+          <option value="worcester">Worcester</option>
+          <option value="vaillant">Vaillant</option>
+          <option value="viessmann">Viessmann</option>
+          <option value="ideal">Ideal</option>
         </select>
       </label>
-
-      <label>
-        Manufacturer / set
-        <select id="manufacturerSelect"></select>
+      <label>Upload photo
+        <input id="file" type="file" accept="image/*" />
       </label>
+      <button id="autoBtn" class="primary">Auto AI pass</button>
+    </div>
+  </header>
 
-      <label for="calibValue">Known flue OD (mm)</label>
-      <input id="calibValue" type="number" value="100" min="40" max="200" step="1">
-
-      <div id="instructions">
-        <p>1. Upload the wall photo.</p>
-        <p>2. Select maker (clearances update).</p>
-        <p>3. Tap “Flue ellipse” and size it tightly around the terminal.</p>
-        <p>4. Pick a tool (window opening, gutter, eaves) and tap 2–3 points to mark it.</p>
-        <p>5. Use “Auto-detect objects” or “AI: refine with my marks” for overlays.</p>
+  <main>
+    <section class="card">
+      <div class="row wrap">
+        <button id="brushFlue"   class="chip red">Brush: Flue (red)</button>
+        <button id="brushOpen"   class="chip yellow">Brush: Opening (yellow)</button>
+        <button id="brushBound"  class="chip blue">Brush: Boundary (blue)</button>
+        <button id="brushOther"  class="chip green">Brush: Other (green)</button>
+        <button id="togglePan"   class="chip">Pan: OFF</button>
+        <button id="clearMask"   class="chip">Clear paint</button>
       </div>
+      <small>Paint rough hints. Red=flue, Yellow=opening (aperture), Blue=boundary/facing surface, Green=other (gutter/downpipe/eaves).</small>
 
-      <div id="tools">
-        <button data-tool="window-opening">Window opening (300mm)</button>
-        <button data-tool="window-fabric">Window fabric (150mm)</button>
-        <button data-tool="gutter">Gutter / pipe (75mm)</button>
-        <button data-tool="eaves">Eaves / soffit (200mm)</button>
-        <button data-tool="boundary">Facing surface (600mm)</button>
-        <button data-tool="flue" class="primary">Flue ellipse</button>
-        <button id="undoBtn">Undo</button>
-      </div>
+      <div id="stageWrap">
+        <canvas id="scene"></canvas>
 
-      <div id="assistControls">
-        <button id="autoDetectBtn">Auto-detect objects</button>
-        <button id="roughBrushBtn">Rough paint → AI clean</button>
-      </div>
-
-      <div id="aiControls">
-        <div class="card">
-          <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
-            <button id="maskFlue"   style="background:#ff4d4d;color:#000">Brush: Flue (red)</button>
-            <button id="maskOpen"   style="background:#ffd84d;color:#000">Brush: Opening (yellow)</button>
-            <button id="maskBound"  style="background:#4da3ff;color:#fff">Brush: Boundary (blue)</button>
-            <button id="maskOther"  style="background:#38d26b;color:#000">Brush: Other (green)</button>
-            <button id="maskClear">Clear mask</button>
+        <!-- Pan arrows overlay -->
+        <div id="arrows">
+          <button data-pan="up">▲</button>
+          <div class="row">
+            <button data-pan="left">◀</button>
+            <button data-pan="reset">⟳</button>
+            <button data-pan="right">▶</button>
           </div>
-          <small>Paint rough hints. Red=flue, Yellow=opening, Blue=boundary, Green=other (gutter/downpipe/eaves).</small>
-        </div>
-
-        <button id="aiAutoBtn">AI: auto (use mask)</button>
-        <button id="aiRefineBtn">AI: refine with my marks</button>
-        <div id="aiStatus" class="muted" role="status" aria-live="polite"></div>
-        <div id="legend"></div>
-        <ul id="aiList"></ul>
-      </div>
-    </aside>
-    <main>
-      <div id="canvasWrapper">
-        <canvas id="sceneCanvas" width="900" height="600"></canvas>
-      </div>
-
-      <section id="resultsPanel">
-        <h3>Results</h3>
-        <table id="resultsTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Object</th>
-              <th>Rule</th>
-              <th>Required (mm)</th>
-              <th>Actual (mm)</th>
-              <th>OK?</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="empty">
-              <td colspan="6">Add a flue and marks to see clearances.</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <div class="previews">
-        <div>
-          <h3>Option A (move)</h3>
-          <canvas id="optA" width="320" height="200"></canvas>
-        </div>
-        <div>
-          <h3>Option B (plume)</h3>
-          <canvas id="optB" width="320" height="200"></canvas>
-        </div>
-        <div>
-          <h3>Option C (extend + plume)</h3>
-          <canvas id="optC" width="320" height="200"></canvas>
-        </div>
-        <div>
-          <h3>Option D (swan neck)</h3>
-          <canvas id="optD" width="320" height="200"></canvas>
+          <button data-pan="down">▼</button>
         </div>
       </div>
-    </main>
-  </div>
-  <script>
-    const aiStatus = document.getElementById("aiStatus");
-    const autoBtn = document.getElementById("aiAutoBtn");
-    const refineBtn = document.getElementById("aiRefineBtn");
-    if (autoBtn) {
-      autoBtn.addEventListener("click", () => {
-        if (typeof window.runAiAuto === "function") {
-          window.runAiAuto();
-        }
-      });
-    }
-    if (refineBtn) {
-      refineBtn.addEventListener("click", () => {
-        if (typeof window.runAiRefine === "function") {
-          window.runAiRefine();
-        }
-      });
-    }
-  </script>
 
-  <script type="module" src="app.js"></script>
+      <div class="row wrap">
+        <button id="refineBtn" class="primary">AI: refine with my marks</button>
+        <span id="aiStatus" class="muted"></span>
+      </div>
+    </section>
+
+    <section id="exports" class="card hidden">
+      <h2>Exports</h2>
+      <div class="grid2">
+        <div>
+          <h3>Standard terminal</h3>
+          <canvas id="exportStd" width="480" height="320"></canvas>
+          <small>Red = no-go; Green = safe. ● = suggested terminal position</small>
+        </div>
+        <div>
+          <h3>Plume kit</h3>
+          <canvas id="exportPlume" width="480" height="320"></canvas>
+          <small>Red = no-go; Blue = terminal path; Green = plume outlet safe. ● = suggested outlet</small>
+        </div>
+      </div>
+      <div class="row wrap">
+        <button id="downloadStd">Download standard</button>
+        <button id="downloadPlume">Download plume</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
 </body>
 </html>
