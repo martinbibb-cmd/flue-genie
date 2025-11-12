@@ -1,5 +1,15 @@
 {
-  "name": "survey-brain-api",
+  "name": "flue-ai",
   "main": "src/worker.js",
-  "compatibility_date": "2025-11-11"
+  "compatibility_date": "2025-11-12",
+  "routes": [],
+  "observability": { "enabled": true },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://martinbibb-cmd.github.io"
+  },
+  "env": {
+    "preview": {
+      "vars": { "ALLOWED_ORIGINS": "*" }
+    }
+  }
 }
