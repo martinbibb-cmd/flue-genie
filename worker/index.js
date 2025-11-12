@@ -51,6 +51,8 @@ function labelForKind(kind) {
   }
 }
 
+const MODEL = "gpt-4.1-mini";
+
 function buildAreas(body) {
   const areas = [];
 
@@ -114,10 +116,56 @@ export default {
       const body = await request.json().catch(() => ({}));
       const areas = buildAreas(body);
 
+      const { image, mask, mode = "detect-only", marks = [], measurements = [] } = body || {};
+      const userText =
+        (mode === "refine"
+          ? "Refine user marks and add missing objects. "
+          : "Auto-detect relevant objects. ") +
+        (mask
+          ? "Use the second image as an attention mask: GREEN = focus regions (prefer detect there), RED = ignore/low priority regions, BLUE = proposed plume path. "
+          : "") +
+        "Return JSON only under key 'areas' with polygon points in image pixels.";
+
+      const content = [
+        {
+          type: "text",
+          text:
+            userText +
+            (marks?.length ? `\nUser marks: ${JSON.stringify(marks).slice(0, 1800)}` : "") +
+            (measurements?.length ? `\nMeasurements: ${JSON.stringify(measurements).slice(0, 1800)}` : "")
+        },
+        { type: "image_url", image_url: { url: image } }
+      ];
+      if (mask) {
+        content.push({ type: "image_url", image_url: { url: mask } });
+      }
+
+      const oaiReq = {
+        model: MODEL,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Detect window openings, window fabric, gutters/downpipes, and eaves/soffits for boiler flue siting. " +
+              "Return {\"areas\":[{label,type,points:[{x,y}],confidence,zone?}]} ONLY. " +
+              "If a plume kit route is obvious adjacent to the terminal, include a 'zone':'plume' region approx where the outlet could terminate."
+          },
+          { role: "user", content }
+        ]
+      };
+
       return new Response(JSON.stringify({
         ok: true,
         areas,
-        received: body
+        received: body,
+        prompt: {
+          userText,
+          contentLength: content.length,
+          includesMask: Boolean(mask),
+          mode
+        },
+        openaiRequest: oaiReq
       }), {
         status: 200,
         headers: {
