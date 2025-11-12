@@ -1,3 +1,10 @@
+const BRAND_RULES = {
+  worcester: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
+  vaillant: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
+  viessmann: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
+  ideal: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
+};
+
 export default {
   async fetch(request, env, ctx) {
     try {
@@ -35,7 +42,16 @@ export default {
         return json({ error: "Unknown endpoint" }, 404, origin);
       }
 
-      const { mode = "detect-only", brand = "worcester", image, mask, marks = [] } =
+      const {
+        mode = "detect-only",
+        brand = "worcester",
+        image,
+        mask,
+        marks = [],
+        imageWidth,
+        imageHeight,
+        existingAreas = [],
+      } =
         await request.json();
 
       if (!image) return json({ error: "missing_image" }, 400, origin);
@@ -143,7 +159,97 @@ export default {
 
       areas = areas.filter((a) => a && Array.isArray(a.points) && a.points.length >= 2);
 
-      return json({ areas }, 200, origin);
+      let exportPayload = null;
+      let exportRaw = null;
+
+      if (mode === "refine") {
+        try {
+          const width = Number.isFinite(Number(imageWidth)) && Number(imageWidth) > 0
+            ? Math.round(Number(imageWidth))
+            : null;
+          const height = Number.isFinite(Number(imageHeight)) && Number(imageHeight) > 0
+            ? Math.round(Number(imageHeight))
+            : null;
+          const viewBoxW = width ?? 1000;
+          const viewBoxH = height ?? 750;
+          const rules = BRAND_RULES[brand] || null;
+          const areaSnippet = JSON.stringify({
+            existingAreas,
+            refinedAreas: areas,
+            marks,
+          }).slice(0, 7000);
+
+          const exportSystemText =
+            "You return ONLY valid JSON. Create two SVG overlays sized to the input image: a 'Standard terminal' map and a 'Plume kit' map. Use red shapes for no-go, green for safe areas, and a small black circle for a suggested terminal position. No prose, no markdown fences.";
+
+          const userContent = [
+            {
+              type: "input_text",
+              text: `Return a JSON object with keys: standard_svg (string), plume_svg (string), notes (string). The SVGs must include viewBox='0 0 ${viewBoxW} ${viewBoxH}' and be fully self-contained.`,
+            },
+            {
+              type: "input_text",
+              text: rules
+                ? `Brand clearance rules (mm): ${JSON.stringify(rules)}.`
+                : "Brand clearance rules unknown; use reasonable assumptions and explain them in notes.",
+            },
+            {
+              type: "input_text",
+              text: `Image width: ${width ?? "unknown"}, height: ${height ?? "unknown"}.`,
+            },
+            {
+              type: "input_text",
+              text: `Detected areas JSON (truncated): ${areaSnippet}`,
+            },
+            { type: "input_text", text: "Notes should explain key decisions in <= 3 sentences." },
+            { type: "input_text", text: "JSON only." },
+            { type: "input_image", image_url: { url: image } },
+            ...(mask ? [{ type: "input_image", image_url: { url: mask } }] : []),
+          ];
+
+          const exportInput = [
+            { role: "system", content: [{ type: "input_text", text: exportSystemText }] },
+            { role: "user", content: userContent },
+          ];
+
+          const exportBody = {
+            model: MODEL,
+            input: exportInput,
+            response_format: { type: "json_object" },
+          };
+
+          const exportRes = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${env.OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify(exportBody),
+          });
+
+          const exportJson = await exportRes.json().catch(() => ({}));
+          if (!exportRes.ok) {
+            exportRaw = exportJson;
+          } else {
+            const expContent = exportJson?.output?.[0]?.content?.[0];
+            const expText = expContent?.text ?? expContent?.json ?? JSON.stringify(expContent ?? {});
+            exportRaw = typeof expText === "string" ? expText : JSON.stringify(expText);
+            try {
+              exportPayload = typeof expText === "string" ? JSON.parse(expText) : expText;
+            } catch (err) {
+              exportPayload = null;
+            }
+          }
+        } catch (err) {
+          exportRaw = String(err);
+        }
+      }
+
+      const body = { areas };
+      if (exportPayload) body.exports = exportPayload;
+      if (exportRaw != null) body.exports_raw = exportRaw;
+
+      return json(body, 200, origin);
     } catch (err) {
       return json({ error: String(err) }, 500, "*");
     }

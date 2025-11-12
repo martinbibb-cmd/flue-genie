@@ -68,15 +68,17 @@
       <div class="grid2">
         <div>
           <h3>Standard terminal</h3>
-          <canvas id="exportStd" width="480" height="320"></canvas>
+          <div id="export-standard" class="export-pane"></div>
           <small>Red = no-go; Green = safe. ● = suggested terminal position</small>
         </div>
         <div>
           <h3>Plume kit</h3>
-          <canvas id="exportPlume" width="480" height="320"></canvas>
+          <div id="export-plume" class="export-pane"></div>
           <small>Red = no-go; Blue = terminal path; Green = plume outlet safe. ● = suggested outlet</small>
         </div>
       </div>
+      <h4>Notes</h4>
+      <pre id="export-notes" class="export-notes"></pre>
       <div class="row wrap">
         <button id="downloadStd">Download standard</button>
         <button id="downloadPlume">Download plume</button>

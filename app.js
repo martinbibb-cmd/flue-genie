@@ -11,12 +11,94 @@ const refineBtn = document.getElementById("refineBtn");
 const aiStatus = document.getElementById("aiStatus");
 const togglePanBtn = document.getElementById("togglePan");
 const exportsCard = document.getElementById("exports");
-const exportStd = document.getElementById("exportStd");
-const exportPlume = document.getElementById("exportPlume");
+const exportStd = document.getElementById("export-standard");
+const exportPlume = document.getElementById("export-plume");
+const exportNotes = document.getElementById("export-notes");
 const dlStd = document.getElementById("downloadStd");
 const dlPlume = document.getElementById("downloadPlume");
 
 const ZOOM_STEP = 1.12;
+
+let lastExportSvgs = { standard: null, plume: null };
+
+function clearExports(hideCard = false) {
+  exportStd.innerHTML = "";
+  exportPlume.innerHTML = "";
+  exportNotes.textContent = "";
+  lastExportSvgs = { standard: null, plume: null };
+  dlStd.disabled = true;
+  dlPlume.disabled = true;
+  if (hideCard) {
+    exportsCard.classList.add("hidden");
+  }
+}
+
+function updateExports(data, rawContent) {
+  clearExports(false);
+  let hasSvg = false;
+  let notesSet = false;
+  if (data && typeof data === "object") {
+    if (typeof data.standard_svg === "string" && data.standard_svg.trim()) {
+      exportStd.innerHTML = data.standard_svg;
+      lastExportSvgs.standard = data.standard_svg;
+      hasSvg = true;
+    }
+    if (typeof data.plume_svg === "string" && data.plume_svg.trim()) {
+      exportPlume.innerHTML = data.plume_svg;
+      lastExportSvgs.plume = data.plume_svg;
+      hasSvg = true;
+    }
+    if (typeof data.notes === "string" && data.notes.trim()) {
+      exportNotes.textContent = data.notes.trim();
+      notesSet = true;
+    }
+  }
+
+  const rawText = typeof rawContent === "string"
+    ? rawContent
+    : rawContent
+      ? JSON.stringify(rawContent, null, 2)
+      : "";
+
+  if (!hasSvg) {
+    exportStd.textContent = rawText || "No export data returned.";
+  }
+
+  if (!notesSet && rawText) {
+    exportNotes.textContent = rawText;
+    notesSet = true;
+  }
+
+  dlStd.disabled = !lastExportSvgs.standard;
+  dlPlume.disabled = !lastExportSvgs.plume;
+
+  return hasSvg || notesSet || Boolean(rawText) || Boolean(exportStd.textContent);
+}
+
+function downloadSvg(svgMarkup, filename) {
+  if (!svgMarkup) return;
+  const blob = new Blob([svgMarkup], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+dlStd.onclick = () => {
+  if (lastExportSvgs.standard) {
+    downloadSvg(lastExportSvgs.standard, "flue-standard.svg");
+  }
+};
+
+dlPlume.onclick = () => {
+  if (lastExportSvgs.plume) {
+    downloadSvg(lastExportSvgs.plume, "flue-plume.svg");
+  }
+};
+
+clearExports(true);
 
 function zoomAt(cx, cy, factor) {
   if (!imgLoaded) return;
@@ -264,18 +346,6 @@ function drawFlueEllipse() {
   g.restore();
 }
 
-/* Brand rules (fan-assisted) */
-const RULES = {
-  worcester: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
-  vaillant: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
-  viessmann: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
-  ideal: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 }
-};
-function pxPerMm() {
-  if (!flue) return null;
-  return (Math.min(flue.rx, flue.ry) * 2) / 100;
-}
-
 /* File load */
 fileInput.onchange = e => {
   const f = e.target.files?.[0];
@@ -288,7 +358,7 @@ fileInput.onchange = e => {
     maskCtx.clearRect(0, 0, mask.width, mask.height);
     flue = null;
     aiAreas = [];
-    exportsCard.classList.add("hidden");
+    clearExports(true);
     aiStatus.textContent = "";
     panMode = false;
     togglePanBtn.textContent = "Pan: OFF";
@@ -312,7 +382,10 @@ async function callAI(mode) {
     brand: brandSel.value,
     image: scene.toDataURL("image/jpeg", 0.6),
     mask: maskData,
-    marks: flue ? [{ kind: "flue", type: "ellipse", x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry }] : []
+    marks: flue ? [{ kind: "flue", type: "ellipse", x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry }] : [],
+    imageWidth: scene.width,
+    imageHeight: scene.height,
+    existingAreas: aiAreas
   };
   try {
     const res = await fetch(AI_ENDPOINT, {
@@ -393,121 +466,23 @@ autoBtn.onclick = async () => {
 
 refineBtn.onclick = async () => {
   aiStatus.textContent = "Refining with your marks…";
+  clearExports(true);
   const r = await callAI("refine");
   if (r.error) {
     aiStatus.textContent = "AI error: " + (r.error.message || JSON.stringify(r.error));
     return;
   }
   aiAreas = Array.isArray(r.areas) ? r.areas : [];
-  buildExports();
-  exportsCard.classList.remove("hidden");
+  const hasExports = updateExports(
+    r.exports,
+    r.exports_raw ?? r.export_raw ?? r.raw_exports ?? r.rawExport
+  );
+  if (hasExports) {
+    exportsCard.classList.remove("hidden");
+  }
   aiStatus.textContent = `Refined ${aiAreas.length} area(s). Exports below.`;
   draw();
 };
-
-/* Export generation */
-function buildExports() {
-  if (!imgLoaded || !flue) return;
-  const brand = brandSel.value;
-  const rules = RULES[brand];
-  const ppm = pxPerMm();
-  if (!ppm || !rules) return;
-
-  function drawPhoto(dst, overlayFn) {
-    const g = dst.getContext("2d");
-    g.clearRect(0, 0, dst.width, dst.height);
-    if (!imgW || !imgH) return;
-    g.drawImage(img, 0, 0, dst.width, dst.height);
-    const scaleX = dst.width / imgW;
-    const scaleY = dst.height / imgH;
-    g.save();
-    g.scale(scaleX, scaleY);
-    overlayFn(g);
-    g.restore();
-  }
-
-  function nearestByKind(kind) {
-    const list = aiAreas.filter(a => a.kind === kind && Array.isArray(a.points) && a.points.length);
-    if (!list.length) return { dist: Infinity, dir: { x: 1, y: 0 } };
-    function centroid(a) {
-      const xs = a.points.map(p => p.x);
-      const ys = a.points.map(p => p.y);
-      return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
-    }
-    let best = { dist: Infinity, dir: { x: 1, y: 0 } };
-    list.forEach(a => {
-      const c = centroid(a);
-      const dx = c.x - flue.x;
-      const dy = c.y - flue.y;
-      const d = Math.hypot(dx, dy);
-      if (d < best.dist) {
-        best = { dist: d, dir: { x: Math.sign(dx) || 1, y: Math.sign(dy) || 0 } };
-      }
-    });
-    return best;
-  }
-
-  drawPhoto(exportStd, g => {
-    const Rstd = Math.max(rules.opening, rules.fabric, rules.gutter, rules.eaves) * ppm;
-    g.fillStyle = "rgba(255,0,0,.18)";
-    g.beginPath();
-    g.arc(flue.x, flue.y, Rstd, 0, Math.PI * 2);
-    g.fill();
-
-    g.fillStyle = "rgba(0,180,0,.08)";
-    g.fillRect(0, 0, imgW, imgH);
-    g.globalCompositeOperation = "destination-out";
-    g.beginPath();
-    g.arc(flue.x, flue.y, Rstd, 0, Math.PI * 2);
-    g.fill();
-    g.globalCompositeOperation = "source-over";
-
-    const n = nearestByKind("window-opening");
-    const shift = (rules.opening + 120) * ppm;
-    const sug = { x: flue.x - n.dir.x * shift, y: flue.y - n.dir.y * 40 };
-    g.fillStyle = "#d00";
-    g.beginPath();
-    g.arc(sug.x, sug.y, 6, 0, Math.PI * 2);
-    g.fill();
-  });
-
-  drawPhoto(exportPlume, g => {
-    const Rterm = Math.max(rules.fabric, rules.gutter) * ppm;
-    g.fillStyle = "rgba(255,0,0,.18)";
-    g.beginPath();
-    g.arc(flue.x, flue.y, Rterm, 0, Math.PI * 2);
-    g.fill();
-
-    const Rplume = 150 * ppm;
-    g.strokeStyle = "rgba(0,120,255,.9)";
-    g.lineWidth = 10;
-    g.beginPath();
-    g.arc(flue.x, flue.y, Rplume, 0, Math.PI * 2);
-    g.stroke();
-
-    g.fillStyle = "rgba(0,180,0,.09)";
-    g.beginPath();
-    g.arc(flue.x, flue.y, Rplume + 40 * ppm, 0, Math.PI * 2);
-    g.fill();
-
-    const n = nearestByKind("window-opening");
-    const sug = { x: flue.x + (n.dir.x ? -n.dir.x : 1) * (Rplume + 30 * ppm), y: flue.y };
-    g.fillStyle = "#0a7";
-    g.beginPath();
-    g.arc(sug.x, sug.y, 6, 0, Math.PI * 2);
-    g.fill();
-  });
-
-  dlStd.onclick = () => downloadCanvas(exportStd, "flue-standard.png");
-  dlPlume.onclick = () => downloadCanvas(exportPlume, "flue-plume.png");
-}
-
-function downloadCanvas(cvs, name) {
-  const a = document.createElement("a");
-  a.href = cvs.toDataURL("image/png");
-  a.download = name;
-  a.click();
-}
 
 scene.addEventListener("dblclick", e => {
   if (!imgLoaded) return;
