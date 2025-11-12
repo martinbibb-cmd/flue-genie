@@ -73,9 +73,10 @@ const aiRefineBtn = document.getElementById("aiRefineBtn");
 const aiStatus = document.getElementById("aiStatus");
 const aiList = document.getElementById("aiList");
 const legendEl = document.getElementById("legend");
-const maskBrushGreenBtn = document.getElementById("maskBrushGreen");
-const maskBrushRedBtn = document.getElementById("maskBrushRed");
-const maskBrushBlueBtn = document.getElementById("maskBrushBlue");
+const maskFlueBtn = document.getElementById("maskFlue");
+const maskOpenBtn = document.getElementById("maskOpen");
+const maskBoundBtn = document.getElementById("maskBound");
+const maskOtherBtn = document.getElementById("maskOther");
 const maskClearBtn = document.getElementById("maskClear");
 const autoDetectBtn = document.getElementById("autoDetectBtn");
 const roughBrushBtn = document.getElementById("roughBrushBtn");
@@ -85,6 +86,44 @@ const sceneCtx = ctx;
 
 const maskCanvas = document.createElement("canvas");
 const maskCtx = maskCanvas.getContext("2d", { willReadFrequently: true });
+
+const MASK_BRUSH_COLORS = {
+  flue: "rgba(255, 77, 77, 0.95)",
+  opening: "rgba(255, 216, 77, 0.95)",
+  boundary: "rgba(77, 163, 255, 0.95)",
+  other: "rgba(56, 210, 107, 0.95)"
+};
+
+const AI_KIND_COLORS = {
+  flue: { stroke: "rgba(255, 77, 77, 0.9)", fill: "rgba(255, 77, 77, 0.18)" },
+  "window-opening": { stroke: "rgba(255, 216, 77, 0.9)", fill: "rgba(255, 216, 77, 0.2)" },
+  opening: { stroke: "rgba(255, 216, 77, 0.9)", fill: "rgba(255, 216, 77, 0.2)" },
+  boundary: { stroke: "rgba(77, 163, 255, 0.9)", fill: "rgba(77, 163, 255, 0.2)" },
+  other: { stroke: "rgba(56, 210, 107, 0.9)", fill: "rgba(56, 210, 107, 0.2)" }
+};
+
+const AI_KIND_TEXT_COLOURS = {
+  flue: "#ff4d4d",
+  "window-opening": "#ffd84d",
+  opening: "#ffd84d",
+  boundary: "#4da3ff",
+  other: "#38d26b"
+};
+
+const MASK_BRUSH_BUTTONS = [
+  { key: "flue", element: maskFlueBtn },
+  { key: "opening", element: maskOpenBtn },
+  { key: "boundary", element: maskBoundBtn },
+  { key: "other", element: maskOtherBtn }
+];
+
+function deactivateMaskButtons() {
+  MASK_BRUSH_BUTTONS.forEach(({ element }) => {
+    if (element) {
+      element.classList.remove("active");
+    }
+  });
+}
 
 function sizeMaskToScene() {
   maskCanvas.width = sceneCanvas.width;
@@ -129,7 +168,7 @@ let measurementResults = [];
 let roughBrushMode = false;
 let roughStrokes = [];
 let roughActivePointerId = null;
-let maskMode = "green";
+let maskMode = "flue";
 let maskPaintingEnabled = false;
 let isPaintingMask = false;
 let maskPointerId = null;
@@ -173,31 +212,22 @@ function setMaskBrush(mode, button) {
     maskPaintingEnabled = false;
     maskPointerId = null;
     lastMaskPt = null;
-    if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
-    if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
-    if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
+    deactivateMaskButtons();
     return;
   }
 
   maskMode = mode;
   maskPaintingEnabled = true;
-  if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
-  if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
-  if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
-  if (button) {
-    button.classList.add("active");
-  }
+  deactivateMaskButtons();
+  MASK_BRUSH_BUTTONS.forEach(({ element, key }) => {
+    if (element) {
+      element.classList.toggle("active", maskPaintingEnabled && key === maskMode);
+    }
+  });
 }
 
 function rgbaForMask(mode) {
-  switch (mode) {
-    case "green":
-      return "rgba(0,255,0,0.8)";
-    case "blue":
-      return "rgba(0,128,255,0.8)";
-    default:
-      return "rgba(255,0,0,0.8)";
-  }
+  return MASK_BRUSH_COLORS[mode] || "rgba(255,255,255,0.85)";
 }
 
 function drawMaskStroke(from, to) {
@@ -280,11 +310,13 @@ function filterAiAreas(areas, canvas, ctx) {
 
 function mapAiLabelToKind(label = "") {
   const l = String(label || "").toLowerCase();
+  if (l.includes("flue")) return "flue";
   if (l.includes("fabric")) return "window-fabric";
   if (l.includes("window")) return "window-opening";
   if (l.includes("soffit") || l.includes("eaves")) return "eaves";
   if (l.includes("gutter") || l.includes("pipe") || l.includes("downpipe")) return "gutter";
   if (l.includes("boundary") || l.includes("facing")) return "boundary";
+  if (l.includes("other")) return "other";
   return null;
 }
 
@@ -328,7 +360,7 @@ function applyAiAreasToPaintedObjects(areas, { replaceExisting = true, source = 
 
   let added = 0;
   areas.forEach(area => {
-    const kind = mapAiLabelToKind(area?.label || area?.zone);
+    const kind = mapAiLabelToKind(area?.kind || area?.label || area?.zone);
     if (!kind) return;
     const points = normaliseAiPoints(area?.points);
     if (!points || points.length === 0) return;
@@ -427,9 +459,7 @@ document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
     currentTool = btn.dataset.tool;
     maskPaintingEnabled = false;
     maskPointerId = null;
-    if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
-    if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
-    if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
+    deactivateMaskButtons();
     document.querySelectorAll("#tools button[data-tool]").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     draw();
@@ -441,18 +471,18 @@ if (initialToolBtn) {
   initialToolBtn.classList.add("active");
 }
 
-if (maskBrushGreenBtn) {
-  maskBrushGreenBtn.addEventListener("click", () => setMaskBrush("green", maskBrushGreenBtn));
-}
-if (maskBrushRedBtn) {
-  maskBrushRedBtn.addEventListener("click", () => setMaskBrush("red", maskBrushRedBtn));
-}
-if (maskBrushBlueBtn) {
-  maskBrushBlueBtn.addEventListener("click", () => setMaskBrush("blue", maskBrushBlueBtn));
-}
+MASK_BRUSH_BUTTONS.forEach(({ key, element }) => {
+  if (element) {
+    element.addEventListener("click", () => setMaskBrush(key, element));
+  }
+});
 if (maskClearBtn) {
   maskClearBtn.addEventListener("click", () => {
     maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+    deactivateMaskButtons();
+    maskPaintingEnabled = false;
+    maskPointerId = null;
+    lastMaskPt = null;
     draw();
   });
 }
@@ -532,9 +562,8 @@ bgUpload.addEventListener("change", e => {
     sizeMaskToScene();
     maskPaintingEnabled = false;
     maskPointerId = null;
-    if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
-    if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
-    if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
+    lastMaskPt = null;
+    deactivateMaskButtons();
     viewScale = 1;
     viewOffsetX = 0;
     viewOffsetY = 0;
@@ -697,19 +726,19 @@ function draw() {
           .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))
       : [];
 
-    const stroke = area.zone === "safe"
-      ? "rgba(0,180,0,0.8)"
-      : area.zone === "plume"
-        ? "rgba(0,120,255,0.8)"
-        : "rgba(255,0,0,0.8)";
+    const colors = AI_KIND_COLORS[area.kind] || {
+      stroke: "rgba(59, 130, 246, 0.85)",
+      fill: "rgba(59, 130, 246, 0.18)"
+    };
 
     ctx.save();
-    ctx.strokeStyle = stroke;
+    ctx.strokeStyle = colors.stroke;
     ctx.lineWidth = 3;
 
     let anchor = null;
+    let bounds = null;
 
-    if (area.type === "polygon" && points.length) {
+    if ((area.type === "polygon" || area.type === "rect") && points.length) {
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
       for (let i = 1; i < points.length; i++) {
@@ -717,7 +746,21 @@ function draw() {
       }
       ctx.closePath();
       ctx.stroke();
-      anchor = points[0];
+      ctx.fillStyle = colors.fill;
+      ctx.fill();
+      points.forEach(pt => {
+        if (!bounds) {
+          bounds = { minX: pt.x, maxX: pt.x, minY: pt.y, maxY: pt.y };
+        } else {
+          bounds.minX = Math.min(bounds.minX, pt.x);
+          bounds.maxX = Math.max(bounds.maxX, pt.x);
+          bounds.minY = Math.min(bounds.minY, pt.y);
+          bounds.maxY = Math.max(bounds.maxY, pt.y);
+        }
+      });
+      if (bounds) {
+        anchor = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
+      }
     } else if (area.type === "line" && points.length >= 2) {
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
@@ -729,16 +772,23 @@ function draw() {
       };
     }
 
+    if (!anchor && points.length) {
+      anchor = points[0];
+    }
+
     if (anchor) {
-      const labelText = `${idx + 1}. ${area.label || area.zone || "AI area"}`;
+      const confidence = Number.isFinite(area.confidence)
+        ? ` (${Math.round(area.confidence * 100)}%)`
+        : "";
+      const labelText = `#${idx + 1} ${area.label || area.kind || "AI area"}${confidence}`;
       ctx.font = "12px sans-serif";
       const textWidth = ctx.measureText(labelText).width + 8;
       const x = anchor.x + 6;
-      const y = anchor.y - 16;
-      ctx.fillStyle = "rgba(0,0,0,0.75)";
-      ctx.fillRect(x, y, textWidth, 16);
-      ctx.fillStyle = "#fff";
-      ctx.fillText(labelText, x + 4, y + 12);
+      const y = anchor.y - 18;
+      ctx.fillStyle = "rgba(15,23,42,0.85)";
+      ctx.fillRect(x, y, textWidth, 18);
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillText(labelText, x + 4, y + 13);
     }
 
     ctx.restore();
@@ -785,9 +835,14 @@ function renderLegendFromAI(areas) {
   legendEl.innerHTML = "";
   if (!areas || !areas.length) return;
   areas.forEach((area, i) => {
-    const colour = area.zone === "safe" ? "green" : area.zone === "plume" ? "blue" : "red";
+    const colour = AI_KIND_TEXT_COLOURS[area.kind] || "#64748b";
+    const confidence = Number.isFinite(area?.confidence)
+      ? ` (${Math.round(area.confidence * 100)}%)`
+      : "";
     const div = document.createElement("div");
-    div.innerHTML = `<strong style="color:${colour}">#${i + 1}</strong> ${area.label || "object"} (${Math.round((area.confidence || 0) * 100)}%)`;
+    div.innerHTML = `<strong style="color:${colour}">#${i + 1}</strong> ${
+      area.label || area.kind || "object"
+    }${confidence}`;
     legendEl.appendChild(div);
   });
 }
@@ -1849,36 +1904,112 @@ function buildAiPayload({ includeMarks = true } = {}) {
   return payload;
 }
 
-function handleAiResult(result) {
-  let areas = Array.isArray(result?.areas) ? result.areas : [];
-  areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
+function fallbackAreasFromMask() {
+  if (!maskCanvas.width || !maskCanvas.height) {
+    return [];
+  }
 
-  if (result?.error) {
-    if (aiStatus) {
-      aiStatus.textContent = "AI error: " + JSON.stringify(result.error);
-      aiStatus.classList.add("error");
+  const classes = [
+    { name: "flue", rgb: [255, 77, 77], kind: "flue" },
+    { name: "opening", rgb: [255, 216, 77], kind: "window-opening" },
+    { name: "boundary", rgb: [77, 163, 255], kind: "boundary" },
+    { name: "other", rgb: [56, 210, 107], kind: "other" }
+  ];
+
+  const { width: W, height: H } = maskCanvas;
+  if (W === 0 || H === 0) return [];
+
+  let imageData;
+  try {
+    imageData = maskCtx.getImageData(0, 0, W, H);
+  } catch (err) {
+    console.warn("Unable to read mask image data", err);
+    return [];
+  }
+
+  const data = imageData.data;
+
+  function close(a, b) {
+    return Math.abs(a - b) <= 30;
+  }
+
+  function match(index, rgb) {
+    const r = data[index];
+    const g = data[index + 1];
+    const b = data[index + 2];
+    const a = data[index + 3];
+    if (a < 80) return false;
+    return close(r, rgb[0]) && close(g, rgb[1]) && close(b, rgb[2]);
+  }
+
+  const areas = [];
+
+  classes.forEach(cls => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let hit = false;
+
+    for (let y = 0; y < H; y += 2) {
+      for (let x = 0; x < W; x += 2) {
+        const i = (y * W + x) * 4;
+        if (match(i, cls.rgb)) {
+          hit = true;
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
     }
-    aiOverlays = [];
-    renderLegendFromAI(aiOverlays);
-    draw();
-    return;
+
+    if (hit && maxX - minX > 12 && maxY - minY > 12) {
+      areas.push({
+        label: cls.name,
+        kind: cls.kind,
+        type: "rect",
+        confidence: 0.2,
+        points: [
+          { x: minX, y: minY },
+          { x: maxX, y: minY },
+          { x: maxX, y: maxY },
+          { x: minX, y: maxY }
+        ]
+      });
+    }
+  });
+
+  return areas;
+}
+
+function handleAiResult(result) {
+  const hasError = Boolean(result?.error);
+  let areas = Array.isArray(result?.areas) ? result.areas : [];
+  if (areas.length) {
+    areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
   }
 
   if (!areas.length) {
-    if (aiStatus) {
-      aiStatus.textContent = "AI returned nothing. Using your mask + rules.";
-      aiStatus.classList.remove("error");
+    const fallback = fallbackAreasFromMask();
+    if (fallback.length) {
+      areas = fallback;
+      if (aiStatus) {
+        aiStatus.textContent = hasError
+          ? "AI error – used painted mask fallback."
+          : "AI returned nothing – using your painted mask.";
+        aiStatus.classList.toggle("error", hasError);
+      }
+    } else if (aiStatus) {
+      const errorText = hasError ? `AI error: ${JSON.stringify(result.error)}` : "AI returned nothing.";
+      aiStatus.textContent = errorText;
+      aiStatus.classList.toggle("error", hasError);
     }
-    aiOverlays = [];
-    renderLegendFromAI(aiOverlays);
-    draw();
-    return;
-  }
-
-  if (aiStatus) {
+  } else if (aiStatus) {
     aiStatus.textContent = `AI detected ${areas.length} object(s).`;
     aiStatus.classList.remove("error");
   }
+
   aiOverlays = areas;
   renderLegendFromAI(aiOverlays);
   draw();
