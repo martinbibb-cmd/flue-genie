@@ -1,143 +1,167 @@
-const MODEL = "gpt-4.1-mini";
-
-function json(body, status = 200, origin = "*") {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      "Access-Control-Allow-Origin": origin
-    }
-  });
-}
-
 export default {
-  async fetch(request, env) {
-    const origin = request.headers.get("origin") || "*";
+  async fetch(request, env, ctx) {
+    try {
+      const origin = request.headers.get("Origin") || "*";
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": origin,
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type"
-        }
-      });
-    }
-
-    const url = new URL(request.url);
-    const normalisedPath = url.pathname.replace(/\/+$/, "") || "/";
-    const isAnalyseRequest =
-      normalisedPath === "/" ||
-      normalisedPath.endsWith("/analyse-flue-image") ||
-      normalisedPath.endsWith("/ai/analyse-flue-image") ||
-      normalisedPath.endsWith("/api/analyse-flue-image");
-
-    if (request.method === "POST" && isAnalyseRequest) {
-      let body = {};
-      try {
-        body = await request.json();
-      } catch (err) {
-        console.warn("Failed to parse JSON body", err);
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            ...cors(),
+            "access-control-allow-origin": origin,
+          },
+        });
       }
 
-      const { image, mask, mode = "detect-only", marks = [] } = body || {};
-      if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
-        return json({ error: "image dataURL required" }, 400, origin);
+      if (request.method !== "POST") {
+        return new Response(
+          JSON.stringify({ ok: true, service: "flue-genie-ai" }),
+          {
+            status: 200,
+            headers: { ...cors(), "access-control-allow-origin": origin },
+          }
+        );
       }
+
+      const url = new URL(request.url);
+      const normalisedPath = url.pathname.replace(/\/+$/, "") || "/";
+      const isAnalyseRequest =
+        normalisedPath === "/" ||
+        normalisedPath.endsWith("/analyse-flue-image") ||
+        normalisedPath.endsWith("/ai/analyse-flue-image") ||
+        normalisedPath.endsWith("/api/analyse-flue-image");
+
+      if (!isAnalyseRequest) {
+        return json({ error: "Unknown endpoint" }, 404, origin);
+      }
+
+      const { mode = "detect-only", brand = "worcester", image, mask, marks = [] } =
+        await request.json();
+
+      if (!image) return json({ error: "missing_image" }, 400, origin);
 
       if (!env?.OPENAI_API_KEY) {
         return json({ error: "missing OPENAI_API_KEY" }, 500, origin);
       }
 
-      const SYSTEM =
-        "[json] You detect precise building features for boiler flue siting. " +
-        "You are given a photo and an optional PAINTED MASK with CATEGORY COLOURS: " +
-        "RED=flue, YELLOW=opening (window/door aperture), BLUE=boundary/facing surface, GREEN=other (gutter/downpipe/eaves). " +
-        "Use the mask as a hint and snap to exact edges. " +
-        "Respond in valid json only, exactly: " +
-        '{"areas":[{"label":string,"kind":"flue"|"window-opening"|"boundary"|"other","type":"polygon"|"rect","points":[{"x":number,"y":number}],"confidence":number}]}';
+      const MODEL = "gpt-4o-mini"; // vision-capable + affordable
+      const systemText =
+        "You detect precise building features for boiler flue siting from photos. " +
+        "Categories: FLUE (terminal), WINDOW-OPENING (aperture), BOUNDARY/FACING-SURFACE, OTHER (gutter/downpipe/eaves/soffit). " +
+        "If a rough PAINTED MASK is supplied, use it only as a hint and snap to true edges in the image. " +
+        "Return only the minimal geometry needed: polygons or rects in image pixel coords, no prose.";
 
       const userText =
         (mode === "refine"
-          ? "[json] Refine user marks and return strict json only."
-          : "[json] Auto-detect objects and return strict json only.") +
-        (marks?.length ? ` User marks (json): ${JSON.stringify(marks).slice(0, 1800)}` : "");
+          ? "Refine user marks; output detected areas using the schema."
+          : "Auto-detect areas; output using the schema.") +
+        (marks?.length ? ` User marks: ${JSON.stringify(marks).slice(0, 1800)}` : "");
 
-      const content = [
-        { type: "text", text: userText },
-        { type: "image_url", image_url: { url: image } }
+      const input = [
+        {
+          role: "system",
+          content: [{ type: "input_text", text: systemText }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: userText },
+            { type: "input_image", image_url: { url: image } },
+            ...(mask ? [{ type: "input_image", image_url: { url: mask } }] : []),
+          ],
+        },
       ];
-      if (mask) {
-        content.push({ type: "image_url", image_url: { url: mask } });
-      }
 
-      const baseReq = {
-        model: MODEL,
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content }
-        ],
-        response_format: { type: "json_object" }
+      const schema = {
+        name: "areas_schema",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["areas"],
+          properties: {
+            areas: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["kind", "type", "points"],
+                properties: {
+                  label: { type: "string" },
+                  kind: {
+                    type: "string",
+                    enum: ["flue", "window-opening", "boundary", "other"],
+                  },
+                  type: { type: "string", enum: ["polygon", "rect"] },
+                  points: {
+                    type: "array",
+                    minItems: 2,
+                    items: {
+                      type: "object",
+                      required: ["x", "y"],
+                      additionalProperties: false,
+                      properties: {
+                        x: { type: "number" },
+                        y: { type: "number" },
+                      },
+                    },
+                  },
+                  confidence: { type: "number" },
+                },
+              },
+            },
+          },
+        },
       };
 
-      async function callOpenAI(req) {
-        try {
-          const res = await fetch("https://api.openai.com/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${env.OPENAI_API_KEY}`
-            },
-            body: JSON.stringify(req)
-          });
-          const body = await res.json().catch(() => ({}));
-          return { ok: res.ok, body };
-        } catch (err) {
-          console.error("OpenAI request failed", err);
-          return { ok: false, body: { message: "openai_request_failed" } };
-        }
-      }
+      const body = {
+        model: MODEL,
+        input,
+        response_format: { type: "json_schema", json_schema: schema },
+      };
 
-      let oai = await callOpenAI(baseReq);
+      const oai = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
 
-      if (
-        !oai.ok &&
-        (oai.body?.type === "invalid_request_error" || /json/i.test(oai.body?.message || ""))
-      ) {
-        const retryReq = { ...baseReq };
-        delete retryReq.response_format;
-        const retryContent = [
-          { type: "text", text: `${userText} Output ONLY the json object.` },
-          { type: "image_url", image_url: { url: image } }
-        ];
-        if (mask) {
-          retryContent.push({ type: "image_url", image_url: { url: mask } });
-        }
-        retryReq.messages = [
-          { role: "system", content: `${SYSTEM} Return ONLY json text with no prose.` },
-          { role: "user", content: retryContent }
-        ];
-        oai = await callOpenAI(retryReq);
-      }
+      const data = await oai.json().catch(() => ({}));
+      if (!oai.ok) return json({ error: data }, oai.status || 502, origin);
 
-      if (!oai.ok) {
-        return json({ areas: [], error: oai.body || { message: "openai_failed" } }, 502, origin);
-      }
-
-      let parsed = {};
+      let areas = [];
       try {
-        parsed = JSON.parse(oai.body?.choices?.[0]?.message?.content || "{}");
-      } catch (err) {
-        console.warn("Failed to parse OpenAI JSON", err);
+        const content = data?.output?.[0]?.content?.[0];
+        const txt = content?.text ?? content?.json ?? JSON.stringify(content ?? {});
+        const parsed = typeof txt === "string" ? JSON.parse(txt) : txt;
+        areas = Array.isArray(parsed?.areas) ? parsed.areas : [];
+      } catch (e) {
+        return json({ areas: [], error: "parse_failed", raw: data }, 502, origin);
       }
 
-      let areas = Array.isArray(parsed.areas) ? parsed.areas : [];
-      areas = areas.filter(area => Array.isArray(area.points) && area.points.length >= 2);
+      areas = areas.filter((a) => a && Array.isArray(a.points) && a.points.length >= 2);
 
       return json({ areas }, 200, origin);
+    } catch (err) {
+      return json({ error: String(err) }, 500, "*");
     }
-
-    return json({ error: "Unknown endpoint" }, 404, origin);
-  }
+  },
 };
 
+function cors() {
+  return {
+    "content-type": "application/json",
+    "access-control-allow-origin": "*",
+    "access-control-allow-headers": "*",
+    "access-control-allow-methods": "POST,GET,OPTIONS",
+  };
+}
+
+function json(obj, status = 200, origin = "*") {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...cors(), "access-control-allow-origin": origin },
+  });
+}
