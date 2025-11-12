@@ -68,21 +68,22 @@ const optCCTX = optCCanvas.getContext("2d");
 const optDCanvas = document.getElementById("optD");
 const optDCTX = optDCanvas.getContext("2d");
 const boilerTypeSelect = document.getElementById("boilerType");
-const aiPass1Btn = document.getElementById("aiPass1Btn");
-const aiPass2Btn = document.getElementById("aiPass2Btn");
-const aiStatusEl = document.getElementById("aiStatus");
+const aiAutoBtn = document.getElementById("aiAutoBtn");
+const aiRefineBtn = document.getElementById("aiRefineBtn");
+const aiStatus = document.getElementById("aiStatus");
 const aiList = document.getElementById("aiList");
 const legendEl = document.getElementById("legend");
 const autoDetectBtn = document.getElementById("autoDetectBtn");
 const roughBrushBtn = document.getElementById("roughBrushBtn");
 
+const sceneCanvas = canvas;
+const sceneCtx = ctx;
+
 const ROUGH_BRUSH_IDLE_LABEL = roughBrushBtn
   ? roughBrushBtn.textContent
   : "Rough paint → AI clean";
 
-const AI_WORKER_ENDPOINT =
-  (typeof window !== "undefined" && window.AI_WORKER_URL) ||
-  "https://survey-brain-api.martinbibb.workers.dev/analyse-flue-image";
+const AI_ENDPOINT = "https://flue-genie-ai.martinbibb.workers.dev";
 
 // view / camera
 let viewScale = 1;
@@ -115,15 +116,15 @@ let roughStrokes = [];
 let roughActivePointerId = null;
 
 function resetAIStatus() {
-  if (!aiStatusEl) return;
-  aiStatusEl.textContent = "";
-  aiStatusEl.classList.remove("error");
+  if (!aiStatus) return;
+  aiStatus.textContent = "";
+  aiStatus.classList.remove("error");
 }
 
 function setAIStatus(message, { isError = false } = {}) {
-  if (!aiStatusEl) return;
-  aiStatusEl.textContent = message || "";
-  aiStatusEl.classList.toggle("error", !!message && isError);
+  if (!aiStatus) return;
+  aiStatus.textContent = message || "";
+  aiStatus.classList.toggle("error", !!message && isError);
 }
 
 function invalidateAIOverlays() {
@@ -154,85 +155,52 @@ function normaliseAiPoints(points = []) {
     .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
 }
 
-function filterAiAreas(areas, canvasEl, canvasCtx) {
+function filterAiAreas(areas, canvas, ctx) {
   if (!areas || !areas.length) return [];
+  const MIN_SIZE = 20;
+  const MERGE_DIST = 28;
 
-  const MIN_SIZE = 28;
-  const MIN_VARIANCE = 12;
-  const MERGE_DIST = 32;
-
-  let imgData = null;
-  try {
-    if (canvasEl && canvasCtx) {
-      imgData = canvasCtx.getImageData(0, 0, canvasEl.width, canvasEl.height);
-    }
-  } catch (e) {
-    // ignore — typically cross-origin; fall back to size filter only
-  }
-
-  function getBox(area) {
-    if (!area.points || !area.points.length) return null;
+  function box(area) {
+    const pts = Array.isArray(area.points) ? area.points : [];
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    area.points.forEach(pt => {
-      if (pt.x < minX) minX = pt.x;
-      if (pt.y < minY) minY = pt.y;
-      if (pt.x > maxX) maxX = pt.x;
-      if (pt.y > maxY) maxY = pt.y;
+    pts.forEach(p => {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
     });
-    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      w: maxX - minX,
+      h: maxY - minY,
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2
+    };
   }
 
-  function hasTexture(box) {
-    if (!imgData) return true;
-    const { minX, minY, maxX, maxY } = box;
-    const samples = 12;
-    const values = [];
-    for (let i = 0; i < samples; i++) {
-      const x = Math.floor(minX + Math.random() * (maxX - minX));
-      const y = Math.floor(minY + Math.random() * (maxY - minY));
-      if (x < 0 || y < 0 || x >= imgData.width || y >= imgData.height) continue;
-      const idx = (y * imgData.width + x) * 4;
-      const r = imgData.data[idx];
-      const g = imgData.data[idx + 1];
-      const b = imgData.data[idx + 2];
-      const luma = (r + g + b) / 3;
-      values.push(luma);
-    }
-    if (!values.length) return false;
-    const avg = values.reduce((sum, val) => sum + val, 0) / values.length;
-    const variance =
-      values.reduce((sum, val) => sum + Math.abs(val - avg), 0) / values.length;
-    return variance >= MIN_VARIANCE;
-  }
+  const filtered = areas
+    .filter(area => {
+      const b = box(area);
+      return isFinite(b.w) && b.w >= MIN_SIZE && b.h >= MIN_SIZE;
+    })
+    .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
-  let filtered = areas.filter(area => {
-    const box = getBox(area);
-    if (!box) return false;
-    if (box.w < MIN_SIZE && box.h < MIN_SIZE) return false;
-    if (!hasTexture(box)) return false;
-    return true;
-  });
-
-  filtered.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
   const final = [];
   filtered.forEach(area => {
-    const boxA = getBox(area);
-    if (!boxA) return;
-    const ax = (boxA.minX + boxA.maxX) / 2;
-    const ay = (boxA.minY + boxA.maxY) / 2;
-    const tooClose = final.some(other => {
-      const boxB = getBox(other);
-      if (!boxB) return false;
-      const bx = (boxB.minX + boxB.maxX) / 2;
-      const by = (boxB.minY + boxB.maxY) / 2;
-      const dx = ax - bx;
-      const dy = ay - by;
+    const ba = box(area);
+    const ok = !final.some(existing => {
+      const bf = box(existing);
+      const dx = ba.cx - bf.cx;
+      const dy = ba.cy - bf.cy;
       return Math.sqrt(dx * dx + dy * dy) < MERGE_DIST;
     });
-    if (!tooClose) {
+    if (ok) {
       final.push(area);
     }
   });
@@ -426,18 +394,6 @@ undoBtn.addEventListener("click", () => {
     evaluateAndRender();
   }
 });
-
-if (aiPass1Btn) {
-  aiPass1Btn.addEventListener("click", () => {
-    runAI({ includeMarks: false, button: aiPass1Btn });
-  });
-}
-
-if (aiPass2Btn) {
-  aiPass2Btn.addEventListener("click", () => {
-    runAI({ includeMarks: true, button: aiPass2Btn });
-  });
-}
 
 if (autoDetectBtn) {
   autoDetectBtn.addEventListener("click", () => {
@@ -722,57 +678,15 @@ function colourForKind(kind) {
   }
 }
 
-function colourForZone(zone) {
-  switch (zone) {
-    case "safe":
-      return {
-        stroke: "rgba(34,197,94,0.9)",
-        fill: "rgba(134,239,172,0.25)",
-        text: "#16a34a"
-      };
-    case "plume":
-      return {
-        stroke: "rgba(59,130,246,0.9)",
-        fill: "rgba(147,197,253,0.25)",
-        text: "#2563eb"
-      };
-    default:
-      return {
-        stroke: "rgba(239,68,68,0.9)",
-        fill: "rgba(248,113,113,0.25)",
-        text: "#dc2626"
-      };
-  }
-}
-
-function formatAiAreaLabel(area, { fallback = "AI area" } = {}) {
-  let baseLabel = fallback;
-  if (area && typeof area.label === "string" && area.label.trim().length > 0) {
-    baseLabel = area.label;
-  } else if (area && typeof area.zone === "string" && area.zone.trim()) {
-    baseLabel = area.zone;
-  }
-  const conf =
-    area && typeof area.confidence === "number"
-      ? ` (${Math.round(area.confidence * 100)}%)`
-      : "";
-  return `${baseLabel}${conf}`;
-}
-
 function renderLegendFromAI(areas) {
   if (!legendEl) return;
   legendEl.innerHTML = "";
-  if (!areas || areas.length === 0) {
-    return;
-  }
-
-  areas.forEach((area, index) => {
-    const palette = colourForZone(area.zone);
-    const wrapper = document.createElement("div");
-    const label = formatAiAreaLabel(area, { fallback: "AI area" });
-    const info = area.rule ? `${label} – ${area.rule}` : label;
-    wrapper.innerHTML = `<strong style="color:${palette.text}">#${index + 1}</strong> ${info}`;
-    legendEl.appendChild(wrapper);
+  if (!areas || !areas.length) return;
+  areas.forEach((area, i) => {
+    const colour = area.zone === "safe" ? "green" : area.zone === "plume" ? "blue" : "red";
+    const div = document.createElement("div");
+    div.innerHTML = `<strong style="color:${colour}">#${i + 1}</strong> ${area.label || "object"} (${Math.round((area.confidence || 0) * 100)}%)`;
+    legendEl.appendChild(div);
   });
 }
 
@@ -1788,117 +1702,169 @@ function buildAiPayload({ includeMarks = true } = {}) {
   return payload;
 }
 
-async function runAI({ includeMarks = true, button } = {}) {
+async function runAiAuto() {
   if (!bgImage) {
     setAIStatus("Upload a wall photo before running the AI.", { isError: true });
+    aiOverlays = buildOverlaysFromUserMarks();
+    renderLegendFromAI(aiOverlays);
+    draw();
     return;
   }
-  if (!flue) {
-    setAIStatus("Place the flue ellipse before running the AI.", { isError: true });
-    return;
+
+  const payload = {
+    image: sceneCanvas.toDataURL("image/jpeg", 0.6),
+    mode: "detect-only"
+  };
+
+  if (aiAutoBtn) {
+    aiAutoBtn.disabled = true;
   }
-
-  const payload = buildAiPayload({ includeMarks });
-  payload.mode = "zones";
-  const analysingText = includeMarks
-    ? "Analysing with your marks..."
-    : "Analysing the photo...";
-  setAIStatus(analysingText);
-
-  let defaultText = "";
-  if (button) {
-    defaultText = button.textContent;
-    button.disabled = true;
-    button.textContent = "Analysing...";
+  if (aiStatus) {
+    aiStatus.textContent = "Analysing with AI…";
+    aiStatus.classList.remove("error");
   }
-
-  aiOverlays = [];
-  renderLegendFromAI(aiOverlays);
-  draw();
 
   try {
     const result = await analyseImageWithAI(payload);
-    const rawAreas = Array.isArray(result?.areas) ? result.areas : [];
-    const filteredAreas = filterAiAreas(rawAreas, canvas, ctx);
+    let areas = Array.isArray(result?.areas) ? result.areas : [];
+    areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
 
-    if (result && result.error) {
-      setAIStatus("AI error from worker – showing your marks only.", { isError: true });
+    if (result?.error) {
+      if (aiStatus) {
+        aiStatus.textContent = "AI error: " + JSON.stringify(result.error);
+        aiStatus.classList.add("error");
+      }
       aiOverlays = buildOverlaysFromUserMarks();
-    } else if (!result || !Array.isArray(result.areas) || result.areas.length === 0 || filteredAreas.length === 0) {
-      setAIStatus("AI worker returned no areas – using your marks instead.");
+    } else if (!areas.length) {
+      if (aiStatus) {
+        aiStatus.textContent = "AI returned nothing – using your marks.";
+        aiStatus.classList.remove("error");
+      }
       aiOverlays = buildOverlaysFromUserMarks();
     } else {
-      aiOverlays = normaliseAIResult({ areas: filteredAreas });
-      const message = `AI detected ${aiOverlays.length} object${aiOverlays.length === 1 ? "" : "s"}.`;
-      setAIStatus(message);
+      if (aiStatus) {
+        aiStatus.textContent = `AI detected ${areas.length} object(s).`;
+        aiStatus.classList.remove("error");
+      }
+      aiOverlays = areas;
     }
-
-    recomputeClearancesAndRender();
-    renderLegendFromAI(aiOverlays);
   } catch (err) {
-    console.error("AI analysis failed", err);
-    setAIStatus("AI error from worker – showing your marks only.", { isError: true });
-    aiOverlays = buildOverlaysFromUserMarks();
-    recomputeClearancesAndRender();
-    renderLegendFromAI(aiOverlays);
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = defaultText || "Run again";
+    console.error("runAiAuto failed", err);
+    if (aiStatus) {
+      aiStatus.textContent = "AI error: " + (err && err.message ? err.message : "unknown error");
+      aiStatus.classList.add("error");
     }
+    aiOverlays = buildOverlaysFromUserMarks();
+  } finally {
+    if (aiAutoBtn) {
+      aiAutoBtn.disabled = false;
+    }
+    renderLegendFromAI(aiOverlays);
+    draw();
   }
 }
 
-function normaliseAIResult(result) {
-  if (!result || typeof result !== "object") return [];
-  const areas = Array.isArray(result.areas) ? result.areas : [];
-  return areas
-    .map(area => {
-      const points = Array.isArray(area.points)
-        ? area.points
-            .map(pt => ({
-              x: typeof pt.x === "number" ? pt.x : Number(pt.x),
-              y: typeof pt.y === "number" ? pt.y : Number(pt.y)
-            }))
-            .filter(pt => isFinite(pt.x) && isFinite(pt.y))
-        : [];
+async function runAiRefine() {
+  if (!bgImage) {
+    setAIStatus("Upload a wall photo before running the AI.", { isError: true });
+    aiOverlays = buildOverlaysFromUserMarks();
+    renderLegendFromAI(aiOverlays);
+    draw();
+    return;
+  }
 
-      return {
-        type: area.type || (points.length <= 2 ? "line" : "polygon"),
-        label: area.label,
-        rule: area.rule,
-        zone: area.zone || "alert",
-        confidence: typeof area.confidence === "number" ? area.confidence : undefined,
-        points
-      };
-    })
-    .filter(area => area.points.length > 0);
+  const payload = {
+    image: sceneCanvas.toDataURL("image/jpeg", 0.6),
+    mode: "refine",
+    marks: paintedObjects.map(shape => ({
+      kind: shape.kind,
+      points: Array.isArray(shape.points)
+        ? shape.points.map(pt => ({ x: pt.x, y: pt.y }))
+        : []
+    })),
+    measurements: typeof buildMeasurementRows === "function" ? buildMeasurementRows() : []
+  };
+
+  if (aiRefineBtn) {
+    aiRefineBtn.disabled = true;
+  }
+  if (aiStatus) {
+    aiStatus.textContent = "Refining with AI…";
+    aiStatus.classList.remove("error");
+  }
+
+  try {
+    const result = await analyseImageWithAI(payload);
+    let areas = Array.isArray(result?.areas) ? result.areas : [];
+    areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
+
+    if (result?.error) {
+      if (aiStatus) {
+        aiStatus.textContent = "AI error: " + JSON.stringify(result.error);
+        aiStatus.classList.add("error");
+      }
+      aiOverlays = buildOverlaysFromUserMarks();
+    } else if (!areas.length) {
+      if (aiStatus) {
+        aiStatus.textContent = "AI didn’t improve your marks – showing marks only.";
+        aiStatus.classList.remove("error");
+      }
+      aiOverlays = buildOverlaysFromUserMarks();
+    } else {
+      if (aiStatus) {
+        aiStatus.textContent = `AI refined ${areas.length} area(s).`;
+        aiStatus.classList.remove("error");
+      }
+      aiOverlays = areas;
+    }
+  } catch (err) {
+    console.error("runAiRefine failed", err);
+    if (aiStatus) {
+      aiStatus.textContent = "AI error: " + (err && err.message ? err.message : "unknown error");
+      aiStatus.classList.add("error");
+    }
+    aiOverlays = buildOverlaysFromUserMarks();
+  } finally {
+    if (aiRefineBtn) {
+      aiRefineBtn.disabled = false;
+    }
+    renderLegendFromAI(aiOverlays);
+    draw();
+  }
 }
 
 async function analyseImageWithAI(payload) {
-  const res = await fetch(AI_WORKER_ENDPOINT, {
+  if (payload.image && typeof payload.image === "string" && payload.image.startsWith("data:image/png")) {
+    try {
+      payload.image = sceneCanvas.toDataURL("image/jpeg", 0.6);
+    } catch (err) {
+      // ignore re-encode issues and send original payload
+    }
+  }
+
+  const res = await fetch(AI_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(payload)
   });
 
-  let data;
+  let json;
   try {
-    data = await res.json();
+    json = await res.json();
   } catch (err) {
-    const message = err && err.message ? err.message : "Invalid JSON from AI worker";
-    return { areas: [], error: message };
+    json = { error: "non-json response" };
   }
 
-  if (!res.ok) {
-    return { areas: [], error: data }; // worker already wraps error payload
-  }
-
-  return data;
+  return json;
 }
 
 // initial draw
 renderSuggestions();
 renderLegend();
 draw();
+
+if (typeof window !== "undefined") {
+  window.runAiAuto = runAiAuto;
+  window.runAiRefine = runAiRefine;
+}
 
