@@ -36,7 +36,7 @@
         <p>2. Select maker (clearances update).</p>
         <p>3. Tap “Flue ellipse” and size it tightly around the terminal.</p>
         <p>4. Pick a tool (window opening, gutter, eaves) and tap 2–3 points to mark it.</p>
-        <p>5. Click “AI: highlight” to see risk zones.</p>
+        <p>5. Use “Auto-detect objects” or “AI: refine with my marks” for overlays.</p>
       </div>
 
       <div id="tools">
@@ -55,9 +55,10 @@
       </div>
 
       <div id="aiControls">
-        <button id="aiPass1Btn">AI: auto zones</button>
-        <button id="aiPass2Btn">AI: refine with my marks</button>
-        <span id="aiStatus" role="status" aria-live="polite"></span>
+        <button id="aiAutoBtn">Auto-detect objects</button>
+        <button id="aiRefineBtn">AI: refine with my marks</button>
+        <div id="aiStatus" class="muted" role="status" aria-live="polite"></div>
+        <div id="legend"></div>
         <ul id="aiList"></ul>
       </div>
     </aside>
@@ -65,8 +66,6 @@
       <div id="canvasWrapper">
         <canvas id="sceneCanvas" width="900" height="600"></canvas>
       </div>
-
-      <div id="legend"></div>
 
       <section id="resultsPanel">
         <h3>Results</h3>
@@ -109,6 +108,25 @@
       </div>
     </main>
   </div>
+  <script>
+    const aiStatus = document.getElementById("aiStatus");
+    const autoBtn = document.getElementById("aiAutoBtn");
+    const refineBtn = document.getElementById("aiRefineBtn");
+    if (autoBtn) {
+      autoBtn.addEventListener("click", () => {
+        if (typeof window.runAiAuto === "function") {
+          window.runAiAuto();
+        }
+      });
+    }
+    if (refineBtn) {
+      refineBtn.addEventListener("click", () => {
+        if (typeof window.runAiRefine === "function") {
+          window.runAiRefine();
+        }
+      });
+    }
+  </script>
 
   <script type="module" src="app.js"></script>
 </body>
