@@ -16,6 +16,23 @@ const exportPlume = document.getElementById("exportPlume");
 const dlStd = document.getElementById("downloadStd");
 const dlPlume = document.getElementById("downloadPlume");
 
+const ZOOM_STEP = 1.12;
+
+function zoomAt(cx, cy, factor) {
+  if (!imgLoaded) return;
+  const rect = scene.getBoundingClientRect();
+  const canvasX = (cx / rect.width) * scene.width;
+  const canvasY = (cy / rect.height) * scene.height;
+  const preX = canvasX / scale - ox;
+  const preY = canvasY / scale - oy;
+  scale *= factor;
+  const postX = canvasX / scale - ox;
+  const postY = canvasY / scale - oy;
+  ox += postX - preX;
+  oy += postY - preY;
+  draw();
+}
+
 /* Brush buttons */
 document.getElementById("brushFlue").onclick = () => setBrush("flue");
 document.getElementById("brushOpen").onclick = () => setBrush("opening");
@@ -120,6 +137,18 @@ document.querySelectorAll("#arrows [data-pan]").forEach(btn => {
   };
 });
 
+document.querySelectorAll("#arrows [data-zoom]").forEach(btn => {
+  btn.onclick = () => {
+    if (!imgLoaded) return;
+    const mode = btn.getAttribute("data-zoom");
+    const rect = scene.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    if (mode === "in") zoomAt(cx, cy, ZOOM_STEP);
+    if (mode === "out") zoomAt(cx, cy, 1 / ZOOM_STEP);
+  };
+});
+
 /* Painting (always on unless Pan mode) */
 let panMode = false;
 let painting = false;
@@ -167,10 +196,11 @@ scene.addEventListener("pointerdown", e => {
     lastPanPt = { x: e.clientX, y: e.clientY };
     return;
   }
+  e.preventDefault();
   painting = true;
   paintPointerId = e.pointerId;
   lastPaintPt = evtPoint(e);
-});
+}, { passive: false });
 
 scene.addEventListener("pointermove", e => {
   if (!imgLoaded) return;
@@ -183,13 +213,15 @@ scene.addEventListener("pointermove", e => {
     return;
   }
   if (!painting || paintPointerId !== e.pointerId) return;
+  e.preventDefault();
   const p = evtPoint(e);
   strokeMask(lastPaintPt, p);
   lastPaintPt = p;
   draw();
-});
+}, { passive: false });
 
 function endPaint(e) {
+  if (!imgLoaded) return;
   if (panMode && panPointerId === e.pointerId) {
     panPointerId = null;
     lastPanPt = null;
@@ -203,7 +235,11 @@ function endPaint(e) {
   releaseCapture(e.pointerId);
 }
 
-scene.addEventListener("pointerup", endPaint);
+scene.addEventListener("pointerup", e => {
+  if (!imgLoaded) return;
+  e.preventDefault();
+  endPaint(e);
+}, { passive: false });
 scene.addEventListener("pointercancel", endPaint);
 scene.addEventListener("pointerleave", e => {
   if (panMode) return;

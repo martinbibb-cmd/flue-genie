@@ -50,18 +50,18 @@ export default {
       }
 
       const SYSTEM =
-        "You detect precise building features for boiler flue siting. " +
-        "You are given a photo and an optional PAINTED MASK where colours mean categories: " +
+        "[json] You detect precise building features for boiler flue siting. " +
+        "You are given a photo and an optional PAINTED MASK with CATEGORY COLOURS: " +
         "RED=flue, YELLOW=opening (window/door aperture), BLUE=boundary/facing surface, GREEN=other (gutter/downpipe/eaves). " +
         "Use the mask as a hint and snap to exact edges. " +
-        "Always respond in valid json only, exactly in the shape: " +
-        "{\"areas\":[{\"label\":string,\"kind\":\"flue\"|\"window-opening\"|\"boundary\"|\"other\",\"type\":\"polygon\"|\"rect\",\"points\":[{\"x\":number,\"y\":number}],\"confidence\":number}]}";
+        "Respond in valid json only, exactly: " +
+        '{"areas":[{"label":string,"kind":"flue"|"window-opening"|"boundary"|"other","type":"polygon"|"rect","points":[{"x":number,"y":number}],"confidence":number}]}';
 
       const userText =
         (mode === "refine"
-          ? "Refine user marks and return strict json."
-          : "Auto-detect objects and return strict json.") +
-        (marks.length ? ` User marks (json): ${JSON.stringify(marks).slice(0, 1800)}` : "");
+          ? "[json] Refine user marks and return strict json only."
+          : "[json] Auto-detect objects and return strict json only.") +
+        (marks?.length ? ` User marks (json): ${JSON.stringify(marks).slice(0, 1800)}` : "");
 
       const content = [
         { type: "text", text: userText },
@@ -71,37 +71,62 @@ export default {
         content.push({ type: "image_url", image_url: { url: mask } });
       }
 
-      const oaiReq = {
+      const baseReq = {
         model: MODEL,
-        response_format: { type: "json_object" },
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content }
-        ]
+        ],
+        response_format: { type: "json_object" }
       };
 
-      let openaiResponse;
-      try {
-        const res = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${env.OPENAI_API_KEY}`
-          },
-          body: JSON.stringify(oaiReq)
-        });
-        openaiResponse = await res.json();
-        if (!res.ok) {
-          return json({ areas: [], error: openaiResponse }, 502, origin);
+      async function callOpenAI(req) {
+        try {
+          const res = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${env.OPENAI_API_KEY}`
+            },
+            body: JSON.stringify(req)
+          });
+          const body = await res.json().catch(() => ({}));
+          return { ok: res.ok, body };
+        } catch (err) {
+          console.error("OpenAI request failed", err);
+          return { ok: false, body: { message: "openai_request_failed" } };
         }
-      } catch (err) {
-        console.error("OpenAI request failed", err);
-        return json({ areas: [], error: "openai_request_failed" }, 502, origin);
+      }
+
+      let oai = await callOpenAI(baseReq);
+
+      if (
+        !oai.ok &&
+        (oai.body?.type === "invalid_request_error" || /json/i.test(oai.body?.message || ""))
+      ) {
+        const retryReq = { ...baseReq };
+        delete retryReq.response_format;
+        const retryContent = [
+          { type: "text", text: `${userText} Output ONLY the json object.` },
+          { type: "image_url", image_url: { url: image } }
+        ];
+        if (mask) {
+          retryContent.push({ type: "image_url", image_url: { url: mask } });
+        }
+        retryReq.messages = [
+          { role: "system", content: `${SYSTEM} Return ONLY json text with no prose.` },
+          { role: "user", content: retryContent }
+        ];
+        oai = await callOpenAI(retryReq);
+      }
+
+      if (!oai.ok) {
+        return json({ areas: [], error: oai.body || { message: "openai_failed" } }, 502, origin);
       }
 
       let parsed = {};
       try {
-        parsed = JSON.parse(openaiResponse?.choices?.[0]?.message?.content || "{}");
+        parsed = JSON.parse(oai.body?.choices?.[0]?.message?.content || "{}");
       } catch (err) {
         console.warn("Failed to parse OpenAI JSON", err);
       }
