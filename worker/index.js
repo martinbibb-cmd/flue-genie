@@ -51,18 +51,17 @@ export default {
 
       const SYSTEM =
         "You detect precise building features for boiler flue siting. " +
-        "You receive a photo and an optional PAINTED MASK. In the mask: " +
-        "RED = FLUE (user’s rough flue location); YELLOW = OPENING (window/door aperture); " +
-        "BLUE = BOUNDARY/FACING SURFACE; GREEN = OTHER (gutter/downpipe/eaves/soffit). " +
-        "Use the mask only as a hint; snap to exact edges in the photo. " +
-        "**Always respond in valid JSON format only**, strictly matching this structure: " +
+        "You are given a photo and an optional PAINTED MASK where colours mean categories: " +
+        "RED=flue, YELLOW=opening (window/door aperture), BLUE=boundary/facing surface, GREEN=other (gutter/downpipe/eaves). " +
+        "Use the mask as a hint and snap to exact edges. " +
+        "Always respond in valid json only, exactly in the shape: " +
         "{\"areas\":[{\"label\":string,\"kind\":\"flue\"|\"window-opening\"|\"boundary\"|\"other\",\"type\":\"polygon\"|\"rect\",\"points\":[{\"x\":number,\"y\":number}],\"confidence\":number}]}";
 
       const userText =
         (mode === "refine"
-          ? "Refine user marks, output precise JSON."
-          : "Detect all relevant objects and output strict JSON.") +
-        (marks.length ? ` User marks: ${JSON.stringify(marks).slice(0, 1800)}` : "");
+          ? "Refine user marks and return strict json."
+          : "Auto-detect objects and return strict json.") +
+        (marks.length ? ` User marks (json): ${JSON.stringify(marks).slice(0, 1800)}` : "");
 
       const content = [
         { type: "text", text: userText },
