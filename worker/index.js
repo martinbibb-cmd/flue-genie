@@ -55,13 +55,14 @@ export default {
         "RED = FLUE (user’s rough flue location); YELLOW = OPENING (window/door aperture); " +
         "BLUE = BOUNDARY/FACING SURFACE; GREEN = OTHER (gutter/downpipe/eaves/soffit). " +
         "Use the mask only as a hint; snap to exact edges in the photo. " +
-        "Return STRICT JSON: {\"areas\":[{label:string, kind:\"flue\"|\"window-opening\"|\"boundary\"|\"other\", type:\"polygon\"|\"rect\", points:[{x,y}], confidence:number}]}";
+        "**Always respond in valid JSON format only**, strictly matching this structure: " +
+        "{\"areas\":[{\"label\":string,\"kind\":\"flue\"|\"window-opening\"|\"boundary\"|\"other\",\"type\":\"polygon\"|\"rect\",\"points\":[{\"x\":number,\"y\":number}],\"confidence\":number}]}";
 
       const userText =
         (mode === "refine"
-          ? "Refine user marks, adjust to exact edges."
-          : "Auto-detect objects.") +
-        (marks.length ? ` User marks JSON (optional): ${JSON.stringify(marks).slice(0, 1800)}` : "");
+          ? "Refine user marks, output precise JSON."
+          : "Detect all relevant objects and output strict JSON.") +
+        (marks.length ? ` User marks: ${JSON.stringify(marks).slice(0, 1800)}` : "");
 
       const content = [
         { type: "text", text: userText },
