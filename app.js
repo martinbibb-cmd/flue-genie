@@ -7,11 +7,11 @@ const MANUFACTURERS = [
 ];
 
 const FAN_RULES = {
-  "window-opening": { label: "Window opening", mm: 300 },
-  "window-fabric": { label: "Window fabric", mm: 150 },
-  gutter: { label: "Gutter / pipe", mm: 75 },
-  eaves: { label: "Eaves / soffit", mm: 200 },
-  boundary: { label: "Facing surface", mm: 600 }
+  "window-opening": { label: "Window opening", mm: 300, zone: "red" },
+  "window-fabric": { label: "Window fabric", mm: 150, zone: "red" },
+  gutter: { label: "Gutter / pipe", mm: 75, zone: "red" },
+  eaves: { label: "Eaves / soffit", mm: 200, zone: "red" },
+  boundary: { label: "Facing surface", mm: 600, zone: "red" }
 };
 
 const RULE_SETS = {
@@ -73,11 +73,26 @@ const aiRefineBtn = document.getElementById("aiRefineBtn");
 const aiStatus = document.getElementById("aiStatus");
 const aiList = document.getElementById("aiList");
 const legendEl = document.getElementById("legend");
+const maskBrushGreenBtn = document.getElementById("maskBrushGreen");
+const maskBrushRedBtn = document.getElementById("maskBrushRed");
+const maskBrushBlueBtn = document.getElementById("maskBrushBlue");
+const maskClearBtn = document.getElementById("maskClear");
 const autoDetectBtn = document.getElementById("autoDetectBtn");
 const roughBrushBtn = document.getElementById("roughBrushBtn");
 
 const sceneCanvas = canvas;
 const sceneCtx = ctx;
+
+const maskCanvas = document.createElement("canvas");
+const maskCtx = maskCanvas.getContext("2d", { willReadFrequently: true });
+
+function sizeMaskToScene() {
+  maskCanvas.width = sceneCanvas.width;
+  maskCanvas.height = sceneCanvas.height;
+  maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+}
+
+sizeMaskToScene();
 
 const ROUGH_BRUSH_IDLE_LABEL = roughBrushBtn
   ? roughBrushBtn.textContent
@@ -114,6 +129,11 @@ let measurementResults = [];
 let roughBrushMode = false;
 let roughStrokes = [];
 let roughActivePointerId = null;
+let maskMode = "green";
+let maskPaintingEnabled = false;
+let isPaintingMask = false;
+let maskPointerId = null;
+let lastMaskPt = null;
 
 function resetAIStatus() {
   if (!aiStatus) return;
@@ -143,6 +163,56 @@ function setRoughBrushMode(enabled) {
   if (!enabled) {
     roughActivePointerId = null;
   }
+}
+
+function setMaskBrush(mode, button) {
+  const togglingOff =
+    maskPaintingEnabled && maskMode === mode && button && button.classList.contains("active");
+
+  if (togglingOff) {
+    maskPaintingEnabled = false;
+    maskPointerId = null;
+    lastMaskPt = null;
+    if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
+    if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
+    if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
+    return;
+  }
+
+  maskMode = mode;
+  maskPaintingEnabled = true;
+  if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
+  if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
+  if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
+  if (button) {
+    button.classList.add("active");
+  }
+}
+
+function rgbaForMask(mode) {
+  switch (mode) {
+    case "green":
+      return "rgba(0,255,0,0.8)";
+    case "blue":
+      return "rgba(0,128,255,0.8)";
+    default:
+      return "rgba(255,0,0,0.8)";
+  }
+}
+
+function drawMaskStroke(from, to) {
+  if (!from || !to) return;
+  maskCtx.strokeStyle = rgbaForMask(maskMode);
+  maskCtx.lineWidth = 22;
+  maskCtx.lineCap = "round";
+  maskCtx.beginPath();
+  maskCtx.moveTo(from.x, from.y);
+  maskCtx.lineTo(to.x, to.y);
+  maskCtx.stroke();
+}
+
+function currentToolIsMask() {
+  return maskPaintingEnabled;
 }
 
 function normaliseAiPoints(points = []) {
@@ -355,6 +425,11 @@ document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
       activeShape = null;
     }
     currentTool = btn.dataset.tool;
+    maskPaintingEnabled = false;
+    maskPointerId = null;
+    if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
+    if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
+    if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
     document.querySelectorAll("#tools button[data-tool]").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     draw();
@@ -364,6 +439,22 @@ document.querySelectorAll("#tools button[data-tool]").forEach(btn => {
 const initialToolBtn = document.querySelector(`#tools button[data-tool="${currentTool}"]`);
 if (initialToolBtn) {
   initialToolBtn.classList.add("active");
+}
+
+if (maskBrushGreenBtn) {
+  maskBrushGreenBtn.addEventListener("click", () => setMaskBrush("green", maskBrushGreenBtn));
+}
+if (maskBrushRedBtn) {
+  maskBrushRedBtn.addEventListener("click", () => setMaskBrush("red", maskBrushRedBtn));
+}
+if (maskBrushBlueBtn) {
+  maskBrushBlueBtn.addEventListener("click", () => setMaskBrush("blue", maskBrushBlueBtn));
+}
+if (maskClearBtn) {
+  maskClearBtn.addEventListener("click", () => {
+    maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+    draw();
+  });
 }
 
 // undo
@@ -438,6 +529,12 @@ bgUpload.addEventListener("change", e => {
     invalidateAIOverlays();
     canvas.width = img.width;
     canvas.height = img.height;
+    sizeMaskToScene();
+    maskPaintingEnabled = false;
+    maskPointerId = null;
+    if (maskBrushGreenBtn) maskBrushGreenBtn.classList.remove("active");
+    if (maskBrushRedBtn) maskBrushRedBtn.classList.remove("active");
+    if (maskBrushBlueBtn) maskBrushBlueBtn.classList.remove("active");
     viewScale = 1;
     viewOffsetX = 0;
     viewOffsetY = 0;
@@ -490,6 +587,11 @@ function draw() {
     ctx.font = "12px sans-serif";
     ctx.fillText(zone.label, zone.cx + 6, zone.cy + 16);
   });
+
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  ctx.drawImage(maskCanvas, 0, 0);
+  ctx.restore();
 
   if (roughStrokes.length > 0) {
     ctx.strokeStyle = "rgba(37,99,235,0.7)";
@@ -778,6 +880,16 @@ canvas.addEventListener("pointerdown", evt => {
 
   const pos = getCanvasPos(evt);
 
+  if (currentToolIsMask()) {
+    evt.preventDefault();
+    isPaintingMask = true;
+    maskPointerId = evt.pointerId;
+    lastMaskPt = pos;
+    drawMaskStroke(pos, pos);
+    draw();
+    return;
+  }
+
   if (roughBrushMode) {
     evt.preventDefault();
     roughActivePointerId = evt.pointerId;
@@ -903,6 +1015,13 @@ canvas.addEventListener("pointermove", evt => {
   }
 
   const pos = getCanvasPos(evt);
+  if (isPaintingMask && maskPointerId === evt.pointerId && currentToolIsMask()) {
+    evt.preventDefault();
+    drawMaskStroke(lastMaskPt || pos, pos);
+    lastMaskPt = pos;
+    draw();
+    return;
+  }
   if (roughBrushMode && roughActivePointerId === evt.pointerId) {
     evt.preventDefault();
     roughStrokes.push(pos);
@@ -948,6 +1067,11 @@ canvas.addEventListener("pointerup", evt => {
   if (roughActivePointerId === evt.pointerId) {
     roughActivePointerId = null;
   }
+  if (maskPointerId === evt.pointerId) {
+    isPaintingMask = false;
+    maskPointerId = null;
+    lastMaskPt = null;
+  }
   draggingFlue = false;
   draggingFlueW = false;
   draggingFlueH = false;
@@ -962,6 +1086,11 @@ canvas.addEventListener("pointercancel", evt => {
   }
   if (roughActivePointerId === evt.pointerId) {
     roughActivePointerId = null;
+  }
+  if (maskPointerId === evt.pointerId) {
+    isPaintingMask = false;
+    maskPointerId = null;
+    lastMaskPt = null;
   }
   draggingFlue = false;
   draggingFlueW = false;
@@ -1199,8 +1328,8 @@ function recomputeClearancesAndRender() {
         cx: flue.x,
         cy: flue.y,
         r: required * activePxPerMm,
-        color: pass ? "rgba(0,200,0,0.05)" : "rgba(255,0,0,0.12)",
-        label: `${ruleNameForKind(shape.kind)} (${required}mm)`
+        color: pass ? "rgba(0,180,0,0.06)" : "rgba(255,0,0,0.12)",
+        label: `${ruleNameForKind(shape.kind)} ${required}mm`
       });
     }
 
@@ -1223,6 +1352,24 @@ function recomputeClearancesAndRender() {
       });
     }
   });
+
+  const windowFail = measurementResults.some(
+    result => result.kind === "window-opening" && result.pass === false
+  );
+  const downpipeOrEavesFail = measurementResults.some(
+    result => (result.kind === "gutter" || result.kind === "eaves") && result.pass === false
+  );
+
+  if (windowFail && !downpipeOrEavesFail && activePxPerMm) {
+    safetyZones.push({
+      type: "circle",
+      cx: flue.x,
+      cy: flue.y,
+      r: 150 * activePxPerMm,
+      color: "rgba(0,120,255,0.12)",
+      label: "Plume outlet 150mm hint"
+    });
+  }
 
   if (rows.length === 0) {
     renderResultsTable([], { emptyMessage: "Mark nearby objects to measure clearances." });
@@ -1702,88 +1849,85 @@ function buildAiPayload({ includeMarks = true } = {}) {
   return payload;
 }
 
-async function runAiAuto() {
-  if (!bgImage) {
-    setAIStatus("Upload a wall photo before running the AI.", { isError: true });
-    aiOverlays = buildOverlaysFromUserMarks();
+function handleAiResult(result) {
+  let areas = Array.isArray(result?.areas) ? result.areas : [];
+  areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
+
+  if (result?.error) {
+    if (aiStatus) {
+      aiStatus.textContent = "AI error: " + JSON.stringify(result.error);
+      aiStatus.classList.add("error");
+    }
+    aiOverlays = [];
     renderLegendFromAI(aiOverlays);
     draw();
     return;
   }
 
-  const payload = {
-    image: sceneCanvas.toDataURL("image/jpeg", 0.6),
-    mode: "detect-only"
-  };
+  if (!areas.length) {
+    if (aiStatus) {
+      aiStatus.textContent = "AI returned nothing. Using your mask + rules.";
+      aiStatus.classList.remove("error");
+    }
+    aiOverlays = [];
+    renderLegendFromAI(aiOverlays);
+    draw();
+    return;
+  }
+
+  if (aiStatus) {
+    aiStatus.textContent = `AI detected ${areas.length} object(s).`;
+    aiStatus.classList.remove("error");
+  }
+  aiOverlays = areas;
+  renderLegendFromAI(aiOverlays);
+  draw();
+}
+
+async function runAiAuto() {
+  if (!bgImage) {
+    setAIStatus("Upload a wall photo before running the AI.", { isError: true });
+    aiOverlays = [];
+    renderLegendFromAI(aiOverlays);
+    draw();
+    return;
+  }
 
   if (aiAutoBtn) {
     aiAutoBtn.disabled = true;
   }
   if (aiStatus) {
-    aiStatus.textContent = "Analysing with AI…";
+    aiStatus.textContent = "Contacting AI…";
     aiStatus.classList.remove("error");
   }
 
   try {
-    const result = await analyseImageWithAI(payload);
-    let areas = Array.isArray(result?.areas) ? result.areas : [];
-    areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
-
-    if (result?.error) {
-      if (aiStatus) {
-        aiStatus.textContent = "AI error: " + JSON.stringify(result.error);
-        aiStatus.classList.add("error");
-      }
-      aiOverlays = buildOverlaysFromUserMarks();
-    } else if (!areas.length) {
-      if (aiStatus) {
-        aiStatus.textContent = "AI returned nothing – using your marks.";
-        aiStatus.classList.remove("error");
-      }
-      aiOverlays = buildOverlaysFromUserMarks();
-    } else {
-      if (aiStatus) {
-        aiStatus.textContent = `AI detected ${areas.length} object(s).`;
-        aiStatus.classList.remove("error");
-      }
-      aiOverlays = areas;
-    }
+    const result = await analyseImageWithAI({ mode: "detect-only" });
+    handleAiResult(result);
   } catch (err) {
     console.error("runAiAuto failed", err);
     if (aiStatus) {
       aiStatus.textContent = "AI error: " + (err && err.message ? err.message : "unknown error");
       aiStatus.classList.add("error");
     }
-    aiOverlays = buildOverlaysFromUserMarks();
+    aiOverlays = [];
+    renderLegendFromAI(aiOverlays);
+    draw();
   } finally {
     if (aiAutoBtn) {
       aiAutoBtn.disabled = false;
     }
-    renderLegendFromAI(aiOverlays);
-    draw();
   }
 }
 
 async function runAiRefine() {
   if (!bgImage) {
     setAIStatus("Upload a wall photo before running the AI.", { isError: true });
-    aiOverlays = buildOverlaysFromUserMarks();
+    aiOverlays = [];
     renderLegendFromAI(aiOverlays);
     draw();
     return;
   }
-
-  const payload = {
-    image: sceneCanvas.toDataURL("image/jpeg", 0.6),
-    mode: "refine",
-    marks: paintedObjects.map(shape => ({
-      kind: shape.kind,
-      points: Array.isArray(shape.points)
-        ? shape.points.map(pt => ({ x: pt.x, y: pt.y }))
-        : []
-    })),
-    measurements: typeof buildMeasurementRows === "function" ? buildMeasurementRows() : []
-  };
 
   if (aiRefineBtn) {
     aiRefineBtn.disabled = true;
@@ -1794,53 +1938,36 @@ async function runAiRefine() {
   }
 
   try {
-    const result = await analyseImageWithAI(payload);
-    let areas = Array.isArray(result?.areas) ? result.areas : [];
-    areas = filterAiAreas(areas, sceneCanvas, sceneCtx);
-
-    if (result?.error) {
-      if (aiStatus) {
-        aiStatus.textContent = "AI error: " + JSON.stringify(result.error);
-        aiStatus.classList.add("error");
-      }
-      aiOverlays = buildOverlaysFromUserMarks();
-    } else if (!areas.length) {
-      if (aiStatus) {
-        aiStatus.textContent = "AI didn’t improve your marks – showing marks only.";
-        aiStatus.classList.remove("error");
-      }
-      aiOverlays = buildOverlaysFromUserMarks();
-    } else {
-      if (aiStatus) {
-        aiStatus.textContent = `AI refined ${areas.length} area(s).`;
-        aiStatus.classList.remove("error");
-      }
-      aiOverlays = areas;
-    }
+    const result = await analyseImageWithAI({
+      mode: "refine",
+      marks: paintedObjects.map(shape => ({
+        kind: shape.kind,
+        points: Array.isArray(shape.points)
+          ? shape.points.map(pt => ({ x: pt.x, y: pt.y }))
+          : []
+      })),
+      measurements: typeof buildMeasurementRows === "function" ? buildMeasurementRows() : []
+    });
+    handleAiResult(result);
   } catch (err) {
     console.error("runAiRefine failed", err);
     if (aiStatus) {
       aiStatus.textContent = "AI error: " + (err && err.message ? err.message : "unknown error");
       aiStatus.classList.add("error");
     }
-    aiOverlays = buildOverlaysFromUserMarks();
+    aiOverlays = [];
+    renderLegendFromAI(aiOverlays);
+    draw();
   } finally {
     if (aiRefineBtn) {
       aiRefineBtn.disabled = false;
     }
-    renderLegendFromAI(aiOverlays);
-    draw();
   }
 }
 
 async function analyseImageWithAI(payload) {
-  if (payload.image && typeof payload.image === "string" && payload.image.startsWith("data:image/png")) {
-    try {
-      payload.image = sceneCanvas.toDataURL("image/jpeg", 0.6);
-    } catch (err) {
-      // ignore re-encode issues and send original payload
-    }
-  }
+  payload.image = sceneCanvas.toDataURL("image/jpeg", 0.6);
+  payload.mask = maskCanvas.toDataURL("image/png");
 
   const res = await fetch(AI_ENDPOINT, {
     method: "POST",

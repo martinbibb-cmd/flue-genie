@@ -58,6 +58,15 @@
         <button id="aiAutoBtn">Auto-detect objects</button>
         <button id="aiRefineBtn">AI: refine with my marks</button>
         <div id="aiStatus" class="muted" role="status" aria-live="polite"></div>
+        <div class="card">
+          <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+            <button id="maskBrushGreen">Mask: Focus (green)</button>
+            <button id="maskBrushRed">Mask: Exclude (red)</button>
+            <button id="maskBrushBlue">Mask: Plume path (blue)</button>
+            <button id="maskClear">Clear mask</button>
+          </div>
+          <small>Tip: paint rough regions. Green = tell AI “look here”, Red = “ignore”, Blue = candidate plume run.</small>
+        </div>
         <div id="legend"></div>
         <ul id="aiList"></ul>
       </div>
