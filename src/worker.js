@@ -68,7 +68,6 @@ export default {
         },
         body: JSON.stringify({
           model: "gpt-4o-mini",
-          response_format: { type: "json_object" },
           messages: [
             { role: "system", content: "Detect window openings, gutters/downpipes, eaves/soffits. Return {\"areas\":[{label, type, points:[{x,y}], confidence}]} only." },
             { role: "user", content: [
