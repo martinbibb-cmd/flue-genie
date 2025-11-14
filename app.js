@@ -1,105 +1,81 @@
-/* CONFIG */
-const AI_ENDPOINT = "https://flue-genie-ai.martinbibb.workers.dev";
+/* Deterministic overlay builder – no AI calls */
 
-/* DOM */
-const brandSel = document.getElementById("brand");
+/* Clearances in mm (edge to edge, obstruction to flue edge) */
+const CLEARANCES_MM = {
+  opening: 300,   // from window opening
+  reveal: 150,    // from reveal
+  downpipe: 75,   // from downpipe / soil pipe
+  lintel: 0       // special: lintel is treated as "no penetration"
+};
+
+/* DOM refs */
 const fileInput = document.getElementById("file");
 const scene = document.getElementById("scene");
 const ctx = scene.getContext("2d", { willReadFrequently: true });
-const autoBtn = document.getElementById("autoBtn");
-const refineBtn = document.getElementById("refineBtn");
-const aiStatus = document.getElementById("aiStatus");
-const togglePanBtn = document.getElementById("togglePan");
-const exportsCard = document.getElementById("exports");
-const exportStd = document.getElementById("export-standard");
-const exportPlume = document.getElementById("export-plume");
-const exportNotes = document.getElementById("export-notes");
-const dlStd = document.getElementById("downloadStd");
-const dlPlume = document.getElementById("downloadPlume");
 
+const togglePanBtn = document.getElementById("togglePan");
+const clearMaskBtn = document.getElementById("clearMask");
+const arrowsContainer = document.getElementById("arrows");
+const generateBtn = document.getElementById("generate");
+const statusEl = document.getElementById("status");
+const debugEl = document.getElementById("debug");
+
+const standardCanvas = document.getElementById("standardMap");
+const plumeCanvas = document.getElementById("plumeMap");
+const dlStdBtn = document.getElementById("downloadStandard");
+const dlPlumeBtn = document.getElementById("downloadPlume");
+
+/* Brush buttons */
+document.getElementById("brushFlue").onclick = () => setBrush("flue");
+document.getElementById("brushOpen").onclick = () => setBrush("opening");
+document.getElementById("brushReveal").onclick = () => setBrush("reveal");
+document.getElementById("brushDownpipe").onclick = () => setBrush("downpipe");
+document.getElementById("brushLintel").onclick = () => setBrush("lintel");
+document.getElementById("brushOther").onclick = () => setBrush("other");
+
+/* Pan/zoom constants */
 const ZOOM_STEP = 1.12;
 
-let lastExportSvgs = { standard: null, plume: null };
+/* Scene state */
+let img = new Image();
+let imgW = 0;
+let imgH = 0;
+let imgLoaded = false;
+let scale = 1;
+let ox = 0;
+let oy = 0;
 
-function clearExports(hideCard = false) {
-  exportStd.innerHTML = "";
-  exportPlume.innerHTML = "";
-  exportNotes.textContent = "";
-  lastExportSvgs = { standard: null, plume: null };
-  dlStd.disabled = true;
-  dlPlume.disabled = true;
-  if (hideCard) {
-    exportsCard.classList.add("hidden");
+/* Separate mask canvas to store painted hints */
+const mask = document.createElement("canvas");
+const maskCtx = mask.getContext("2d", { willReadFrequently: true });
+
+/* Painting + pan state */
+let brush = "flue";
+let panMode = false;
+let painting = false;
+let paintPointerId = null;
+let panPointerId = null;
+let lastPaintPt = null;
+let lastPanPt = null;
+
+/* Brush colours – use solid RGB so we can classify pixels exactly */
+function colorFor(b) {
+  switch (b) {
+    case "flue":     return "#ff0000"; // red
+    case "opening":  return "#ffff00"; // yellow
+    case "reveal":   return "#ff8800"; // orange
+    case "downpipe": return "#00ff00"; // green
+    case "lintel":   return "#0000ff"; // blue
+    case "other":    return "#999999"; // grey
+    default:          return "#ffffff";
   }
 }
 
-function updateExports(data, rawContent) {
-  clearExports(false);
-  let hasSvg = false;
-  let notesSet = false;
-  if (data && typeof data === "object") {
-    if (typeof data.standard_svg === "string" && data.standard_svg.trim()) {
-      exportStd.innerHTML = data.standard_svg;
-      lastExportSvgs.standard = data.standard_svg;
-      hasSvg = true;
-    }
-    if (typeof data.plume_svg === "string" && data.plume_svg.trim()) {
-      exportPlume.innerHTML = data.plume_svg;
-      lastExportSvgs.plume = data.plume_svg;
-      hasSvg = true;
-    }
-    if (typeof data.notes === "string" && data.notes.trim()) {
-      exportNotes.textContent = data.notes.trim();
-      notesSet = true;
-    }
-  }
-
-  const rawText = typeof rawContent === "string"
-    ? rawContent
-    : rawContent
-      ? JSON.stringify(rawContent, null, 2)
-      : "";
-
-  if (!hasSvg) {
-    exportStd.textContent = rawText || "No export data returned.";
-  }
-
-  if (!notesSet && rawText) {
-    exportNotes.textContent = rawText;
-    notesSet = true;
-  }
-
-  dlStd.disabled = !lastExportSvgs.standard;
-  dlPlume.disabled = !lastExportSvgs.plume;
-
-  return hasSvg || notesSet || Boolean(rawText) || Boolean(exportStd.textContent);
+function setBrush(b) {
+  brush = b;
 }
 
-function downloadSvg(svgMarkup, filename) {
-  if (!svgMarkup) return;
-  const blob = new Blob([svgMarkup], { type: "image/svg+xml" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-dlStd.onclick = () => {
-  if (lastExportSvgs.standard) {
-    downloadSvg(lastExportSvgs.standard, "flue-standard.svg");
-  }
-};
-
-dlPlume.onclick = () => {
-  if (lastExportSvgs.plume) {
-    downloadSvg(lastExportSvgs.plume, "flue-plume.svg");
-  }
-};
-
-clearExports(true);
-
+/* Pan helpers */
 function zoomAt(cx, cy, factor) {
   if (!imgLoaded) return;
   const rect = scene.getBoundingClientRect();
@@ -115,67 +91,13 @@ function zoomAt(cx, cy, factor) {
   draw();
 }
 
-/* Brush buttons */
-document.getElementById("brushFlue").onclick = () => setBrush("flue");
-document.getElementById("brushOpen").onclick = () => setBrush("opening");
-document.getElementById("brushBound").onclick = () => setBrush("boundary");
-document.getElementById("brushOther").onclick = () => setBrush("other");
-document.getElementById("clearMask").onclick = () => {
-  maskCtx.clearRect(0, 0, mask.width, mask.height);
+function pan(dx, dy) {
+  ox += dx;
+  oy += dy;
   draw();
-};
-
-document.addEventListener("keydown", e => {
-  if (!imgLoaded) return;
-  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-    e.preventDefault();
-    const step = 40;
-    if (e.key === "ArrowLeft") pan(-step, 0);
-    if (e.key === "ArrowRight") pan(step, 0);
-    if (e.key === "ArrowUp") pan(0, -step);
-    if (e.key === "ArrowDown") pan(0, step);
-  }
-});
-
-let brush = "flue";
-function setBrush(b) {
-  brush = b;
 }
 
-function rgbaFor(b) {
-  return b === "flue"
-    ? "rgba(255, 77, 77, .95)"
-    : b === "opening"
-      ? "rgba(255,216, 77, .95)"
-      : b === "boundary"
-        ? "rgba( 77,163,255, .95)"
-        : "rgba( 56,210,107, .95)";
-}
-
-/* Scene + pan */
-let img = new Image();
-let imgW = 0;
-let imgH = 0;
-let imgLoaded = false;
-let scale = 1;
-let ox = 0;
-let oy = 0;
-
-// separate mask canvas (same pixel size as scene)
-const mask = document.createElement("canvas");
-const maskCtx = mask.getContext("2d", { willReadFrequently: true });
-
-function fitToCanvas() {
-  scene.width = imgW;
-  scene.height = imgH;
-  mask.width = imgW;
-  mask.height = imgH;
-  scale = 1;
-  ox = 0;
-  oy = 0;
-  imgLoaded = true;
-}
-
+/* Draw scene + mask */
 function clearScene() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, scene.width, scene.height);
@@ -190,19 +112,133 @@ function draw() {
   ctx.globalAlpha = 0.22;
   ctx.drawImage(mask, 0, 0);
   ctx.globalAlpha = 1;
-  if (flue) drawFlueEllipse();
-  drawAiOverlays();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-function pan(dx, dy) {
-  ox += dx;
-  oy += dy;
-  draw();
+/* Fit image into canvas pixel space */
+function fitToCanvas() {
+  scene.width = imgW;
+  scene.height = imgH;
+  mask.width = imgW;
+  mask.height = imgH;
+  scale = 1;
+  ox = 0;
+  oy = 0;
+  imgLoaded = true;
 }
 
-/* Arrow buttons */
-document.querySelectorAll("#arrows [data-pan]").forEach(btn => {
+/* Painting + pan events */
+togglePanBtn.onclick = () => {
+  panMode = !panMode;
+  togglePanBtn.textContent = `Pan: ${panMode ? "ON" : "OFF"}`;
+};
+
+function evtPoint(e) {
+  const r = scene.getBoundingClientRect();
+  const x = ((e.clientX - r.left) * (scene.width / r.width) - ox) / scale;
+  const y = ((e.clientY - r.top) * (scene.height / r.height) - oy) / scale;
+  return { x, y };
+}
+
+function strokeMask(a, b) {
+  maskCtx.strokeStyle = colorFor(brush);
+  maskCtx.lineWidth = 24;
+  maskCtx.lineCap = "round";
+  maskCtx.beginPath();
+  maskCtx.moveTo(a.x, a.y);
+  maskCtx.lineTo(b.x, b.y);
+  maskCtx.stroke();
+}
+
+scene.addEventListener(
+  "pointerdown",
+  (e) => {
+    if (!imgLoaded) return;
+    scene.setPointerCapture(e.pointerId);
+    if (panMode) {
+      panPointerId = e.pointerId;
+      lastPanPt = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    e.preventDefault();
+    painting = true;
+    paintPointerId = e.pointerId;
+    lastPaintPt = evtPoint(e);
+  },
+  { passive: false }
+);
+
+scene.addEventListener(
+  "pointermove",
+  (e) => {
+    if (!imgLoaded) return;
+    if (panMode && panPointerId === e.pointerId && lastPanPt) {
+      const dx = e.clientX - lastPanPt.x;
+      const dy = e.clientY - lastPanPt.y;
+      const rect = scene.getBoundingClientRect();
+      pan(dx * (scene.width / rect.width), dy * (scene.height / rect.height));
+      lastPanPt = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    if (!painting || paintPointerId !== e.pointerId) return;
+    e.preventDefault();
+    const p = evtPoint(e);
+    strokeMask(lastPaintPt, p);
+    lastPaintPt = p;
+    draw();
+  },
+  { passive: false }
+);
+
+function endPaint(e) {
+  if (!imgLoaded) return;
+  if (panMode && panPointerId === e.pointerId) {
+    panPointerId = null;
+    lastPanPt = null;
+    try { scene.releasePointerCapture(e.pointerId); } catch {}
+    return;
+  }
+  if (paintPointerId !== e.pointerId) return;
+  painting = false;
+  paintPointerId = null;
+  lastPaintPt = null;
+  try { scene.releasePointerCapture(e.pointerId); } catch {}
+}
+
+scene.addEventListener(
+  "pointerup",
+  (e) => {
+    if (!imgLoaded) return;
+    e.preventDefault();
+    endPaint(e);
+  },
+  { passive: false }
+);
+scene.addEventListener("pointercancel", endPaint);
+scene.addEventListener("pointerleave", (e) => {
+  if (panMode) return;
+  if (painting && paintPointerId === e.pointerId) {
+    painting = false;
+    paintPointerId = null;
+    lastPaintPt = null;
+  }
+});
+
+/* Keyboard arrows */
+document.addEventListener("keydown", (e) => {
+  if (!imgLoaded) return;
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+    e.preventDefault();
+    const step = 40;
+    if (e.key === "ArrowLeft") pan(-step, 0);
+    if (e.key === "ArrowRight") pan(step, 0);
+    if (e.key === "ArrowUp") pan(0, -step);
+    if (e.key === "ArrowDown") pan(0, step);
+  }
+});
+
+/* Arrow + zoom buttons (same behaviour as old app) */
+arrowsContainer.querySelectorAll("[data-pan]").forEach((btn) => {
   btn.onclick = () => {
     if (!imgLoaded) return;
     const dir = btn.getAttribute("data-pan");
@@ -219,7 +255,7 @@ document.querySelectorAll("#arrows [data-pan]").forEach(btn => {
   };
 });
 
-document.querySelectorAll("#arrows [data-zoom]").forEach(btn => {
+document.querySelectorAll("[data-zoom]").forEach((btn) => {
   btn.onclick = () => {
     if (!imgLoaded) return;
     const mode = btn.getAttribute("data-zoom");
@@ -231,123 +267,8 @@ document.querySelectorAll("#arrows [data-zoom]").forEach(btn => {
   };
 });
 
-/* Painting (always on unless Pan mode) */
-let panMode = false;
-let painting = false;
-let paintPointerId = null;
-let panPointerId = null;
-let lastPaintPt = null;
-let lastPanPt = null;
-
-function releaseCapture(id) {
-  if (id == null) return;
-  try {
-    scene.releasePointerCapture(id);
-  } catch (err) {
-    /* ignore */
-  }
-}
-
-togglePanBtn.onclick = () => {
-  panMode = !panMode;
-  togglePanBtn.textContent = `Pan: ${panMode ? "ON" : "OFF"}`;
-};
-
-function evtPoint(e) {
-  const r = scene.getBoundingClientRect();
-  const x = ((e.clientX - r.left) * (scene.width / r.width) - ox) / scale;
-  const y = ((e.clientY - r.top) * (scene.height / r.height) - oy) / scale;
-  return { x, y };
-}
-
-function strokeMask(a, b) {
-  maskCtx.strokeStyle = rgbaFor(brush);
-  maskCtx.lineWidth = 24;
-  maskCtx.lineCap = "round";
-  maskCtx.beginPath();
-  maskCtx.moveTo(a.x, a.y);
-  maskCtx.lineTo(b.x, b.y);
-  maskCtx.stroke();
-}
-
-scene.addEventListener("pointerdown", e => {
-  if (!imgLoaded) return;
-  scene.setPointerCapture(e.pointerId);
-  if (panMode) {
-    panPointerId = e.pointerId;
-    lastPanPt = { x: e.clientX, y: e.clientY };
-    return;
-  }
-  e.preventDefault();
-  painting = true;
-  paintPointerId = e.pointerId;
-  lastPaintPt = evtPoint(e);
-}, { passive: false });
-
-scene.addEventListener("pointermove", e => {
-  if (!imgLoaded) return;
-  if (panMode && panPointerId === e.pointerId && lastPanPt) {
-    const dx = e.clientX - lastPanPt.x;
-    const dy = e.clientY - lastPanPt.y;
-    const rect = scene.getBoundingClientRect();
-    pan(dx * (scene.width / rect.width), dy * (scene.height / rect.height));
-    lastPanPt = { x: e.clientX, y: e.clientY };
-    return;
-  }
-  if (!painting || paintPointerId !== e.pointerId) return;
-  e.preventDefault();
-  const p = evtPoint(e);
-  strokeMask(lastPaintPt, p);
-  lastPaintPt = p;
-  draw();
-}, { passive: false });
-
-function endPaint(e) {
-  if (!imgLoaded) return;
-  if (panMode && panPointerId === e.pointerId) {
-    panPointerId = null;
-    lastPanPt = null;
-    releaseCapture(e.pointerId);
-    return;
-  }
-  if (paintPointerId !== e.pointerId) return;
-  painting = false;
-  paintPointerId = null;
-  lastPaintPt = null;
-  releaseCapture(e.pointerId);
-}
-
-scene.addEventListener("pointerup", e => {
-  if (!imgLoaded) return;
-  e.preventDefault();
-  endPaint(e);
-}, { passive: false });
-scene.addEventListener("pointercancel", endPaint);
-scene.addEventListener("pointerleave", e => {
-  if (panMode) return;
-  if (painting && paintPointerId === e.pointerId) {
-    painting = false;
-    paintPointerId = null;
-    lastPaintPt = null;
-    releaseCapture(e.pointerId);
-  }
-});
-
-/* Flue ellipse (draggable), used for mm calibration via 100 mm */
-let flue = null; // {x,y,rx,ry}
-function drawFlueEllipse() {
-  const g = ctx;
-  g.save();
-  g.lineWidth = 2 / scale;
-  g.strokeStyle = "#ff3333";
-  g.beginPath();
-  g.ellipse(flue.x, flue.y, flue.rx, flue.ry, 0, 0, Math.PI * 2);
-  g.stroke();
-  g.restore();
-}
-
 /* File load */
-fileInput.onchange = e => {
+fileInput.onchange = (e) => {
   const f = e.target.files?.[0];
   if (!f) return;
   const url = URL.createObjectURL(f);
@@ -356,148 +277,201 @@ fileInput.onchange = e => {
     imgH = img.naturalHeight;
     fitToCanvas();
     maskCtx.clearRect(0, 0, mask.width, mask.height);
-    flue = null;
-    aiAreas = [];
-    clearExports(true);
-    aiStatus.textContent = "";
-    panMode = false;
-    togglePanBtn.textContent = "Pan: OFF";
+    statusEl.textContent =
+      "Image loaded. Paint flue, opening, reveal, downpipe and lintel, then click Generate overlays.";
     draw();
     URL.revokeObjectURL(url);
   };
   img.onerror = () => {
-    aiStatus.textContent = "Failed to load image.";
+    statusEl.textContent = "Failed to load image.";
     URL.revokeObjectURL(url);
   };
   img.src = url;
 };
 
-/* AI calls */
-async function callAI(mode) {
-  if (!imgLoaded) return { error: { message: "Load an image first" } };
-  draw();
-  const maskData = mask.width && mask.height ? mask.toDataURL("image/png") : null;
-  const payload = {
-    mode,
-    brand: brandSel.value,
-    image: scene.toDataURL("image/jpeg", 0.6),
-    mask: maskData,
-    marks: flue ? [{ kind: "flue", type: "ellipse", x: flue.x, y: flue.y, rx: flue.rx, ry: flue.ry }] : [],
-    imageWidth: scene.width,
-    imageHeight: scene.height,
-    existingAreas: aiAreas
-  };
-  try {
-    const res = await fetch(AI_ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    let j;
-    try {
-      j = await res.json();
-    } catch (err) {
-      j = { error: { message: "non-json" } };
-    }
-    if (!res.ok) {
-      return { error: j?.error || { message: `HTTP ${res.status}` }, areas: [] };
-    }
-    return j;
-  } catch (err) {
-    return { error: { message: "network error" }, areas: [] };
-  }
-}
-
-let aiAreas = [];
-function drawAiOverlays() {
-  if (!aiAreas.length) return;
-  const g = ctx;
-  g.save();
-  g.lineWidth = 2 / scale;
-  g.strokeStyle = "#ff4d4d";
-  aiAreas.forEach(a => {
-    if (a.type === "rect" && Array.isArray(a.points) && a.points.length >= 2) {
-      const xs = a.points.map(p => p.x);
-      const ys = a.points.map(p => p.y);
-      const minX = Math.min(...xs);
-      const minY = Math.min(...ys);
-      const maxX = Math.max(...xs);
-      const maxY = Math.max(...ys);
-      g.strokeRect(minX, minY, maxX - minX, maxY - minY);
-    } else if (Array.isArray(a.points) && a.points.length) {
-      g.beginPath();
-      g.moveTo(a.points[0].x, a.points[0].y);
-      for (let i = 1; i < a.points.length; i++) {
-        g.lineTo(a.points[i].x, a.points[i].y);
-      }
-      g.closePath();
-      g.stroke();
-    }
-  });
-  g.restore();
-}
-
-autoBtn.onclick = async () => {
-  aiStatus.textContent = "Running auto AI…";
-  const r = await callAI("detect-only");
-  if (r.error) {
-    aiStatus.textContent = "AI error: " + (r.error.message || JSON.stringify(r.error));
-    return;
-  }
-  aiAreas = Array.isArray(r.areas) ? r.areas : [];
-  const fl = aiAreas.find(a => a.kind === "flue" && Array.isArray(a.points) && a.points.length >= 2);
-  if (fl) {
-    const xs = fl.points.map(p => p.x);
-    const ys = fl.points.map(p => p.y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    flue = {
-      x: (minX + maxX) / 2,
-      y: (minY + maxY) / 2,
-      rx: Math.max((maxX - minX) / 2, 20),
-      ry: Math.max((maxY - minY) / 2, 20)
-    };
-  }
-  aiStatus.textContent = `Detected ${aiAreas.length} object(s). You can now paint to correct and run refine.`;
-  draw();
-};
-
-refineBtn.onclick = async () => {
-  aiStatus.textContent = "Refining with your marks…";
-  clearExports(true);
-  const r = await callAI("refine");
-  if (r.error) {
-    console.error("[AI refine] Worker returned error:", r.error);
-    aiStatus.textContent = "AI error: " + (r.error.message || JSON.stringify(r.error));
-    return;
-  }
-  console.log("[AI refine] Worker response:", r);
-  aiAreas = Array.isArray(r.areas) ? r.areas : [];
-  const hasExports = updateExports(
-    r.exports,
-    r.exports_raw ?? r.export_raw ?? r.raw_exports ?? r.rawExport
-  );
-  let showedRawDump = false;
-  if (!hasExports) {
-    const rawJson = JSON.stringify(r, null, 2);
-    if (rawJson) {
-      exportStd.textContent = `Worker raw response (no SVGs):\n${rawJson}`;
-      exportNotes.textContent = rawJson;
-      showedRawDump = true;
-    }
-  }
-  if (hasExports || showedRawDump) {
-    exportsCard.classList.remove("hidden");
-  }
-  aiStatus.textContent = `Refined ${aiAreas.length} area(s). Exports below.`;
-  draw();
-};
-
-scene.addEventListener("dblclick", e => {
+/* Clear paint */
+clearMaskBtn.onclick = () => {
   if (!imgLoaded) return;
-  const p = evtPoint(e);
-  flue = { x: p.x, y: p.y, rx: 28, ry: 28 };
+  maskCtx.clearRect(0, 0, mask.width, mask.height);
   draw();
-});
+};
+
+/* Pixel classification from mask colours */
+function classifyPixel(r, g, b) {
+  if (r === 255 && g === 0 && b === 0) return "flue";
+  if (r === 255 && g === 255 && b === 0) return "opening";
+  if (r === 255 && g === 136 && b === 0) return "reveal";
+  if (r === 0 && g === 255 && b === 0) return "downpipe";
+  if (r === 0 && g === 0 && b === 255) return "lintel";
+  if (r === 153 && g === 153 && b === 153) return "other";
+  return null;
+}
+
+/* Bounding box helper */
+function makeBox() {
+  return { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity, found: false };
+}
+
+function touchBox(box, x, y) {
+  if (!box.found) {
+    box.minX = box.maxX = x;
+    box.minY = box.maxY = y;
+    box.found = true;
+  } else {
+    if (x < box.minX) box.minX = x;
+    if (x > box.maxX) box.maxX = x;
+    if (y < box.minY) box.minY = y;
+    if (y > box.maxY) box.maxY = y;
+  }
+}
+
+/* Generate overlays */
+generateBtn.onclick = () => {
+  if (!imgLoaded) {
+    statusEl.textContent = "Load an image first.";
+    return;
+  }
+
+  const w = mask.width;
+  const h = mask.height;
+  if (!w || !h) {
+    statusEl.textContent = "No image size?";
+    return;
+  }
+
+  const imgData = maskCtx.getImageData(0, 0, w, h).data;
+
+  const boxes = {
+    flue: makeBox(),
+    opening: makeBox(),
+    reveal: makeBox(),
+    downpipe: makeBox(),
+    lintel: makeBox()
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      const r = imgData[idx];
+      const g = imgData[idx + 1];
+      const b = imgData[idx + 2];
+      const type = classifyPixel(r, g, b);
+      if (!type || !boxes[type]) continue;
+      touchBox(boxes[type], x, y);
+    }
+  }
+
+  if (!boxes.flue.found) {
+    statusEl.textContent = "Please paint the flue (in red) so we can calibrate 100 mm.";
+    return;
+  }
+
+  const flueBox = boxes.flue;
+  const flueW = flueBox.maxX - flueBox.minX;
+  const flueH = flueBox.maxY - flueBox.minY;
+  const flueRadiusPx = Math.max(flueW, flueH) / 2;
+  const pxPerMm = flueRadiusPx / 50; // 100 mm dia => 50 mm radius
+
+  const rects = [];
+
+  function pushRectFromBox(box, clearanceMmExtra, kind) {
+    if (!box || !box.found) return;
+    const totalMm = clearanceMmExtra + 50; // add flue radius
+    const bufferPx = totalMm * pxPerMm;
+    let x = box.minX - bufferPx;
+    let y = box.minY - bufferPx;
+    let rw = (box.maxX - box.minX) + 2 * bufferPx;
+    let rh = (box.maxY - box.minY) + 2 * bufferPx;
+
+    if (x < 0) { rw += x; x = 0; }
+    if (y < 0) { rh += y; y = 0; }
+    if (x + rw > w) rw = w - x;
+    if (y + rh > h) rh = h - y;
+
+    rects.push({ x, y, width: rw, height: rh, kind });
+  }
+
+  // openings, reveals, downpipes use their respective clearances
+  pushRectFromBox(boxes.opening, CLEARANCES_MM.opening, "opening");
+  pushRectFromBox(boxes.reveal, CLEARANCES_MM.reveal, "reveal");
+  pushRectFromBox(boxes.downpipe, CLEARANCES_MM.downpipe, "downpipe");
+
+  // lintel – treat as fully blocked: just block its thickness + flue radius
+  if (boxes.lintel.found) {
+    pushRectFromBox(boxes.lintel, CLEARANCES_MM.lintel, "lintel");
+  }
+
+  drawOverlays(rects, pxPerMm);
+};
+
+/* Draw overlays onto the export canvases and enable downloads */
+function drawOverlays(rects, pxPerMm) {
+  const w = imgW;
+  const h = imgH;
+  if (!w || !h) return;
+
+  standardCanvas.width = w;
+  standardCanvas.height = h;
+  plumeCanvas.width = w;
+  plumeCanvas.height = h;
+
+  const sCtx = standardCanvas.getContext("2d");
+  const pCtx = plumeCanvas.getContext("2d");
+
+  // Base image
+  sCtx.clearRect(0, 0, w, h);
+  pCtx.clearRect(0, 0, w, h);
+
+  sCtx.drawImage(img, 0, 0, w, h);
+  pCtx.drawImage(img, 0, 0, w, h);
+
+  // Dim standard, green wash for plume
+  sCtx.fillStyle = "rgba(0,0,0,0.25)";
+  sCtx.fillRect(0, 0, w, h);
+
+  pCtx.fillStyle = "rgba(0,255,0,0.15)";
+  pCtx.fillRect(0, 0, w, h);
+
+  // Red forbidden zones
+  sCtx.fillStyle = "rgba(255,0,0,0.4)";
+  pCtx.fillStyle = "rgba(255,0,0,0.4)";
+
+  rects.forEach((r) => {
+    sCtx.fillRect(r.x, r.y, r.width, r.height);
+    pCtx.fillRect(r.x, r.y, r.width, r.height);
+  });
+
+  statusEl.textContent =
+    `Generated ${rects.length} clearance zone(s). ` +
+    `Scale ≈ ${pxPerMm.toFixed(3)} px/mm from 100 mm flue.`;
+
+  debugEl.textContent = JSON.stringify(
+    { pxPerMm, rects },
+    null,
+    2
+  );
+
+  // Enable download buttons
+  dlStdBtn.disabled = false;
+  dlPlumeBtn.disabled = false;
+}
+
+/* Download helpers */
+function downloadCanvasAsPng(canvas, filename) {
+  const url = canvas.toDataURL("image/png");
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+}
+
+dlStdBtn.onclick = () => {
+  if (!standardCanvas.width) return;
+  downloadCanvasAsPng(standardCanvas, "flue-standard.png");
+};
+
+dlPlumeBtn.onclick = () => {
+  if (!plumeCanvas.width) return;
+  downloadCanvasAsPng(plumeCanvas, "flue-plume.png");
+};
+
