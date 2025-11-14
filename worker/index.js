@@ -308,25 +308,34 @@ function buildDeterministicExports({ areas, marks, rules, brand, width, height }
     rawDetails.ignored = ignored;
   }
 
+  // Build SVG rectangles for each clearance zone
   const rectElements = rects
-    .map(
-      (rect) =>
-        `<rect x="${fmt(rect.x)}" y="${fmt(rect.y)}" width="${fmt(rect.width)}" height="${fmt(rect.height)}" />`
-    )
+    .map((rect) => {
+      const x = rect.x;
+      const y = rect.y;
+      const wPx = rect.width;
+      const hPx = rect.height;
+      // Semi-transparent red block for no-go area
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${wPx.toFixed(1)}" height="${hPx.toFixed(
+        1
+      )}" fill="rgba(255,0,0,0.4)" />`;
+    })
     .join("");
 
-  const rectGroup = rectElements
-    ? `<g fill="#ff4d4d" fill-opacity="0.35" stroke="#ff4d4d" stroke-opacity="0.7" stroke-width="1">${rectElements}</g>`
-    : "";
+  const rectGroup = rectElements || "";
 
+  // Standard terminal map: just the red forbidden zones
   const standardSvg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
-    `${rectGroup}</svg>`;
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">` +
+    rectGroup +
+    `</svg>`;
 
+  // Plume kit map: green background + the same red forbidden zones
   const plumeSvg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
-    `<rect x="0" y="0" width="${width}" height="${height}" fill="#e6f9e6" />` +
-    `${rectGroup}</svg>`;
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">` +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="rgba(0,255,0,0.18)" />` +
+    rectGroup +
+    `</svg>`;
 
   const notesParts = [];
   if (pxPerMm) {
@@ -463,11 +472,6 @@ function clampRect(rect, width, height) {
 function parseNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
-}
-
-function fmt(n) {
-  if (!Number.isFinite(n)) return "0";
-  return n.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
 function titleCase(str) {
