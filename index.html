@@ -1,91 +1,156 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flue Genie — Paint & Check</title>
-<link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header>
-    <h1>Flue Genie</h1>
-    <div class="row">
-      <label>Brand
-        <select id="brand">
-          <option value="worcester">Worcester</option>
-          <option value="vaillant">Vaillant</option>
-          <option value="viessmann">Viessmann</option>
-          <option value="ideal">Ideal</option>
-        </select>
-      </label>
-      <label>Upload photo
-        <input id="file" type="file" accept="image/*" />
-      </label>
-      <button id="autoBtn" class="primary">Auto AI pass</button>
-    </div>
-  </header>
+  <head>
+    <meta charset="utf-8">
+    <title>Flue-Genie – Manual Overlay Builder</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+      /* Minimal layout helpers; can be merged into styles.css later */
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #111;
+        color: #eee;
+      }
+      main.layout {
+        display: flex;
+        flex-direction: row;
+        gap: 12px;
+        padding: 8px;
+      }
+      @media (max-width: 900px) {
+        main.layout {
+          flex-direction: column;
+        }
+      }
+      section.panel {
+        background: #1a1a1a;
+        border-radius: 8px;
+        padding: 8px;
+        flex: 1;
+        min-width: 0;
+      }
+      h1, h2 {
+        margin: 4px 0 8px;
+        font-size: 1rem;
+      }
+      #scene {
+        width: 100%;
+        max-height: 70vh;
+        border-radius: 4px;
+        background: #000;
+        touch-action: none;
+      }
+      .controls-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 6px;
+        align-items: center;
+      }
+      button, input[type="file"] {
+        font-size: 0.85rem;
+      }
+      #arrows {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 4px;
+      }
+      #arrows button {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+      }
+      .brushes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 6px;
+        margin-bottom: 4px;
+      }
+      canvas.export {
+        width: 100%;
+        max-height: 40vh;
+        background: #000;
+        border-radius: 4px;
+        display: block;
+        margin-bottom: 4px;
+      }
+      #status {
+        font-size: 0.8rem;
+        margin-top: 4px;
+        min-height: 1.2em;
+      }
+      #debug {
+        font-size: 0.7rem;
+        white-space: pre-wrap;
+        background: #111;
+        padding: 4px;
+        border-radius: 4px;
+        max-height: 25vh;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <!-- Left: main canvas + painting controls -->
+      <section class="panel" id="leftPanel">
+        <h1>Flue-Genie – mark up your photo</h1>
+        <div class="controls-row">
+          <input type="file" id="file" accept="image/*">
+          <button id="togglePan">Pan: OFF</button>
+          <button id="clearMask">Clear paint</button>
+        </div>
 
-  <main>
-    <section class="card">
-      <div class="row wrap">
-        <button id="brushFlue"   class="chip red">Brush: Flue (red)</button>
-        <button id="brushOpen"   class="chip yellow">Brush: Opening (yellow)</button>
-        <button id="brushBound"  class="chip blue">Brush: Boundary (blue)</button>
-        <button id="brushOther"  class="chip green">Brush: Other (green)</button>
-        <button id="togglePan"   class="chip">Pan: OFF</button>
-        <button id="clearMask"   class="chip">Clear paint</button>
-      </div>
-      <small>Paint rough hints. Red=flue, Yellow=opening (aperture), Blue=boundary/facing surface, Green=other (gutter/downpipe/eaves).</small>
-
-      <div id="stageWrap">
         <canvas id="scene"></canvas>
 
-        <!-- Pan arrows overlay -->
-        <div id="arrows">
-          <button data-pan="up">▲</button>
-          <div class="row">
+        <div class="controls-row" style="justify-content: space-between;">
+          <div id="arrows">
+            <button data-pan="up">▲</button>
             <button data-pan="left">◀</button>
             <button data-pan="reset">⟳</button>
             <button data-pan="right">▶</button>
+            <button data-pan="down">▼</button>
           </div>
-          <button data-pan="down">▼</button>
-
-          <div class="row" style="margin-top:6px">
-            <button data-zoom="in">＋</button>
-            <button data-zoom="out">－</button>
+          <div>
+            <button data-zoom="out">−</button>
+            <button data-zoom="in">+</button>
           </div>
         </div>
-      </div>
 
-      <div class="row wrap">
-        <button id="refineBtn" class="primary">AI: refine with my marks</button>
-        <span id="aiStatus" class="muted"></span>
-      </div>
-    </section>
-
-    <section id="exports" class="card hidden">
-      <h2>Exports</h2>
-      <div class="grid2">
-        <div>
-          <h3>Standard terminal</h3>
-          <div id="export-standard" class="export-pane"></div>
-          <small>Red = no-go; Green = safe. ● = suggested terminal position</small>
+        <div class="brushes">
+          <span style="font-size:0.8rem;">Brush:</span>
+          <button id="brushFlue">Flue (red)</button>
+          <button id="brushOpen">Opening (yellow)</button>
+          <button id="brushReveal">Reveal (orange)</button>
+          <button id="brushDownpipe">Downpipe (green)</button>
+          <button id="brushLintel">Lintel (blue)</button>
+          <button id="brushOther">Other (grey)</button>
         </div>
-        <div>
-          <h3>Plume kit</h3>
-          <div id="export-plume" class="export-pane"></div>
-          <small>Red = no-go; Blue = terminal path; Green = plume outlet safe. ● = suggested outlet</small>
-        </div>
-      </div>
-      <h4>Notes</h4>
-      <pre id="export-notes" class="export-notes"></pre>
-      <div class="row wrap">
-        <button id="downloadStd">Download standard</button>
-        <button id="downloadPlume">Download plume</button>
-      </div>
-    </section>
-  </main>
 
-  <script src="app.js"></script>
-</body>
+        <button id="generate">Generate overlays</button>
+        <p id="status"></p>
+      </section>
+
+      <!-- Right: generated images + debug -->
+      <section class="panel" id="rightPanel">
+        <h2>Standard terminal – no-go zones</h2>
+        <canvas id="standardMap" class="export"></canvas>
+        <button id="downloadStandard" disabled>Download standard map</button>
+
+        <h2>With plume kit – safe vs no-go</h2>
+        <canvas id="plumeMap" class="export"></canvas>
+        <button id="downloadPlume" disabled>Download plume map</button>
+
+        <h2>Debug</h2>
+        <div id="debug">(debug output will appear here)</div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
 </html>
+
