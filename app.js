@@ -469,15 +469,26 @@ refineBtn.onclick = async () => {
   clearExports(true);
   const r = await callAI("refine");
   if (r.error) {
+    console.error("[AI refine] Worker returned error:", r.error);
     aiStatus.textContent = "AI error: " + (r.error.message || JSON.stringify(r.error));
     return;
   }
+  console.log("[AI refine] Worker response:", r);
   aiAreas = Array.isArray(r.areas) ? r.areas : [];
   const hasExports = updateExports(
     r.exports,
     r.exports_raw ?? r.export_raw ?? r.raw_exports ?? r.rawExport
   );
-  if (hasExports) {
+  let showedRawDump = false;
+  if (!hasExports) {
+    const rawJson = JSON.stringify(r, null, 2);
+    if (rawJson) {
+      exportStd.textContent = `Worker raw response (no SVGs):\n${rawJson}`;
+      exportNotes.textContent = rawJson;
+      showedRawDump = true;
+    }
+  }
+  if (hasExports || showedRawDump) {
     exportsCard.classList.remove("hidden");
   }
   aiStatus.textContent = `Refined ${aiAreas.length} area(s). Exports below.`;
