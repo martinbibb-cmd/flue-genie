@@ -1,9 +1,20 @@
 const BRAND_RULES = {
-  worcester: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
-  vaillant: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
-  viessmann: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
-  ideal: { opening: 300, fabric: 150, gutter: 75, eaves: 200, boundary: 600 },
+  // Values are mm edge-to-edge from obstruction to FLUE centreline + 0;
+  // we will always add 50 mm (flue radius) in the geometry step.
+  worcester: {
+    opening: 300,
+    reveal: 150,
+    downpipe: 75,
+    lintel: 0,
+    eaves: 200,
+    boundary: 600,
+  },
+  vaillant: { opening: 300, reveal: 150, downpipe: 75, lintel: 0, eaves: 200, boundary: 600 },
+  viessmann: { opening: 300, reveal: 150, downpipe: 75, lintel: 0, eaves: 200, boundary: 600 },
+  ideal: { opening: 300, reveal: 150, downpipe: 75, lintel: 0, eaves: 200, boundary: 600 },
 };
+
+const FLUE_RADIUS_MM = 50;
 
 export default {
   async fetch(request, env, ctx) {
@@ -50,7 +61,6 @@ export default {
         marks = [],
         imageWidth,
         imageHeight,
-        existingAreas = [],
       } =
         await request.json();
 
@@ -164,84 +174,25 @@ export default {
 
       if (mode === "refine") {
         try {
-          const width = Number.isFinite(Number(imageWidth)) && Number(imageWidth) > 0
-            ? Math.round(Number(imageWidth))
-            : null;
-          const height = Number.isFinite(Number(imageHeight)) && Number(imageHeight) > 0
-            ? Math.round(Number(imageHeight))
-            : null;
+          const width = parseDimension(imageWidth);
+          const height = parseDimension(imageHeight);
           const viewBoxW = width ?? 1000;
           const viewBoxH = height ?? 750;
-          const rules = BRAND_RULES[brand] || null;
-          const areaSnippet = JSON.stringify({
-            existingAreas,
-            refinedAreas: areas,
+          const rules = BRAND_RULES[brand] || BRAND_RULES.worcester;
+
+          const { payload, raw } = buildDeterministicExports({
+            areas,
             marks,
-          }).slice(0, 7000);
-
-          const exportSystemText =
-            "You return ONLY valid JSON. Create two SVG overlays sized to the input image: a 'Standard terminal' map and a 'Plume kit' map. Use red shapes for no-go, green for safe areas, and a small black circle for a suggested terminal position. No prose, no markdown fences.";
-
-          const userContent = [
-            {
-              type: "input_text",
-              text: `Return a JSON object with keys: standard_svg (string), plume_svg (string), notes (string). The SVGs must include viewBox='0 0 ${viewBoxW} ${viewBoxH}' and be fully self-contained.`,
-            },
-            {
-              type: "input_text",
-              text: rules
-                ? `Brand clearance rules (mm): ${JSON.stringify(rules)}.`
-                : "Brand clearance rules unknown; use reasonable assumptions and explain them in notes.",
-            },
-            {
-              type: "input_text",
-              text: `Image width: ${width ?? "unknown"}, height: ${height ?? "unknown"}.`,
-            },
-            {
-              type: "input_text",
-              text: `Detected areas JSON (truncated): ${areaSnippet}`,
-            },
-            { type: "input_text", text: "Notes should explain key decisions in <= 3 sentences." },
-            { type: "input_text", text: "JSON only." },
-            { type: "input_image", image_url: { url: image } },
-            ...(mask ? [{ type: "input_image", image_url: { url: mask } }] : []),
-          ];
-
-          const exportInput = [
-            { role: "system", content: [{ type: "input_text", text: exportSystemText }] },
-            { role: "user", content: userContent },
-          ];
-
-          const exportBody = {
-            model: MODEL,
-            input: exportInput,
-            response_format: { type: "json_object" },
-          };
-
-          const exportRes = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${env.OPENAI_API_KEY}`,
-            },
-            body: JSON.stringify(exportBody),
+            rules,
+            brand,
+            width: viewBoxW,
+            height: viewBoxH,
           });
 
-          const exportJson = await exportRes.json().catch(() => ({}));
-          if (!exportRes.ok) {
-            exportRaw = exportJson;
-          } else {
-            const expContent = exportJson?.output?.[0]?.content?.[0];
-            const expText = expContent?.text ?? expContent?.json ?? JSON.stringify(expContent ?? {});
-            exportRaw = typeof expText === "string" ? expText : JSON.stringify(expText);
-            try {
-              exportPayload = typeof expText === "string" ? JSON.parse(expText) : expText;
-            } catch (err) {
-              exportPayload = null;
-            }
-          }
+          if (payload) exportPayload = payload;
+          if (raw != null) exportRaw = raw;
         } catch (err) {
-          exportRaw = String(err);
+          exportRaw = { error: String(err) };
         }
       }
 
@@ -255,6 +206,274 @@ export default {
     }
   },
 };
+
+function parseDimension(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return Math.round(num);
+}
+
+function buildDeterministicExports({ areas, marks, rules, brand, width, height }) {
+  const calibration = calibrateFromMarks(marks);
+  const pxPerMm = calibration.ok ? calibration.pxPerMm : null;
+  const rawDetails = {
+    brand,
+    rules,
+    calibration,
+    width,
+    height,
+    rects: [],
+  };
+
+  const rects = [];
+  const ignored = [];
+
+  if (pxPerMm) {
+    const uniqueAreas = Array.isArray(areas) ? areas : [];
+    uniqueAreas.forEach((area) => {
+      const category = classifyArea(area);
+      if (!category) {
+        ignored.push({
+          reason: "unclassified",
+          kind: area?.kind ?? null,
+          label: area?.label ?? null,
+        });
+        return;
+      }
+      const clearanceMm = rules?.[category];
+      if (!Number.isFinite(clearanceMm)) {
+        ignored.push({
+          reason: "no_rule",
+          category,
+          kind: area?.kind ?? null,
+          label: area?.label ?? null,
+        });
+        return;
+      }
+      const baseRect = boundingRect(area);
+      if (!baseRect) {
+        ignored.push({
+          reason: "invalid_geometry",
+          category,
+          kind: area?.kind ?? null,
+          label: area?.label ?? null,
+        });
+        return;
+      }
+      const expandMm = clearanceMm + FLUE_RADIUS_MM;
+      const expandPx = expandMm * pxPerMm;
+      const expandedRect = {
+        minX: baseRect.minX - expandPx,
+        minY: baseRect.minY - expandPx,
+        maxX: baseRect.maxX + expandPx,
+        maxY: baseRect.maxY + expandPx,
+      };
+      const clamped = clampRect(expandedRect, width, height);
+      if (!clamped) {
+        ignored.push({
+          reason: "clamped_outside",
+          category,
+          kind: area?.kind ?? null,
+          label: area?.label ?? null,
+        });
+        return;
+      }
+      const rectInfo = {
+        ...clamped,
+        clearanceMm,
+        expandMm,
+        category,
+        label: area?.label ?? null,
+        kind: area?.kind ?? null,
+        baseRect,
+      };
+      rects.push(rectInfo);
+      rawDetails.rects.push({
+        category,
+        clearanceMm,
+        expandMm,
+        label: area?.label ?? null,
+        kind: area?.kind ?? null,
+        baseRect,
+        expandedRect,
+        clampedRect: clamped,
+      });
+    });
+  }
+
+  if (!pxPerMm && calibration.reason) {
+    rawDetails.reason = calibration.reason;
+  }
+  if (ignored.length) {
+    rawDetails.ignored = ignored;
+  }
+
+  const rectElements = rects
+    .map(
+      (rect) =>
+        `<rect x="${fmt(rect.x)}" y="${fmt(rect.y)}" width="${fmt(rect.width)}" height="${fmt(rect.height)}" />`
+    )
+    .join("");
+
+  const rectGroup = rectElements
+    ? `<g fill="#ff4d4d" fill-opacity="0.35" stroke="#ff4d4d" stroke-opacity="0.7" stroke-width="1">${rectElements}</g>`
+    : "";
+
+  const standardSvg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
+    `${rectGroup}</svg>`;
+
+  const plumeSvg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="#e6f9e6" />` +
+    `${rectGroup}</svg>`;
+
+  const notesParts = [];
+  if (pxPerMm) {
+    notesParts.push(
+      `Calibrated at ${pxPerMm.toFixed(3)} px/mm using the 100 mm flue reference (radius ≈ ${calibration.radiusPx.toFixed(
+        2
+      )} px).`
+    );
+    notesParts.push(
+      `Applied ${rects.length} clearance zone${rects.length === 1 ? "" : "s"} using ${titleCase(
+        brand
+      )} rules.`
+    );
+  } else {
+    notesParts.push(
+      `Unable to calibrate pixel size from the flue mark${calibration.reason ? `: ${calibration.reason}` : ""}.`
+    );
+  }
+
+  return {
+    payload: {
+      standard_svg: standardSvg,
+      plume_svg: plumeSvg,
+      notes: notesParts.join(" ").trim() || "No additional notes.",
+    },
+    raw: rawDetails,
+  };
+}
+
+function calibrateFromMarks(marks) {
+  if (!Array.isArray(marks) || !marks.length) {
+    return { ok: false, reason: "no flue ellipse supplied" };
+  }
+  const flueEllipse = marks.find(
+    (mark) => mark && mark.kind === "flue" && mark.type === "ellipse"
+  );
+  if (!flueEllipse) {
+    return { ok: false, reason: "flue ellipse mark missing" };
+  }
+  const rx = parseNumber(flueEllipse.rx);
+  const ry = parseNumber(flueEllipse.ry);
+  if (rx == null || ry == null) {
+    return { ok: false, reason: "invalid ellipse radii" };
+  }
+  const avgRadiusPx = (Math.abs(rx) + Math.abs(ry)) / 2;
+  if (!avgRadiusPx) {
+    return { ok: false, reason: "zero ellipse radius" };
+  }
+  const pxPerMm = avgRadiusPx / FLUE_RADIUS_MM; // 100 mm diameter -> 50 mm radius
+  return {
+    ok: true,
+    pxPerMm,
+    mmPerPx: 1 / pxPerMm,
+    radiusPx: avgRadiusPx,
+    mark: flueEllipse,
+    flueRadiusMm: FLUE_RADIUS_MM,
+  };
+}
+
+function classifyArea(area) {
+  if (!area) return null;
+  const label = typeof area.label === "string" ? area.label.toLowerCase() : "";
+  switch (area.kind) {
+    case "window-opening":
+      if (label.includes("lintel")) return "lintel";
+      if (label.includes("reveal") || label.includes("frame") || label.includes("jamb")) return "reveal";
+      return "opening";
+    case "other":
+      if (label.includes("lintel")) return "lintel";
+      if (label.includes("reveal") || label.includes("frame") || label.includes("jamb")) return "reveal";
+      if (
+        label.includes("downpipe") ||
+        label.includes("pipe") ||
+        label.includes("soil") ||
+        label.includes("rainwater") ||
+        label.includes("gutter")
+      ) {
+        return "downpipe";
+      }
+      if (label.includes("eaves") || label.includes("soffit")) return "eaves";
+      return null;
+    case "boundary":
+      return "boundary";
+    default:
+      return null;
+  }
+}
+
+function boundingRect(area) {
+  const points = Array.isArray(area?.points) ? area.points : [];
+  if (!points.length) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  points.forEach((p) => {
+    const x = parseNumber(p?.x);
+    const y = parseNumber(p?.y);
+    if (x == null || y == null) return;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  });
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function clampRect(rect, width, height) {
+  let { minX, minY, maxX, maxY } = rect;
+  if (Number.isFinite(width)) {
+    minX = Math.max(0, minX);
+    maxX = Math.min(width, maxX);
+  }
+  if (Number.isFinite(height)) {
+    minY = Math.max(0, minY);
+    maxY = Math.min(height, maxY);
+  }
+  const clampedWidth = maxX - minX;
+  const clampedHeight = maxY - minY;
+  if (clampedWidth <= 0 || clampedHeight <= 0) return null;
+  return {
+    x: minX,
+    y: minY,
+    width: clampedWidth,
+    height: clampedHeight,
+    maxX,
+    maxY,
+  };
+}
+
+function parseNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function fmt(n) {
+  if (!Number.isFinite(n)) return "0";
+  return n.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function titleCase(str) {
+  if (typeof str !== "string" || !str.length) return "Unknown";
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
 
 function cors() {
   return {
