@@ -2,11 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>Flue-Genie – Manual Overlay Builder</title>
+    <title>Flue-Genie – Geometry Overlay Tool</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="styles.css">
     <style>
-      /* Minimal layout helpers; can be merged into styles.css later */
       body {
         margin: 0;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -20,9 +19,7 @@
         padding: 8px;
       }
       @media (max-width: 900px) {
-        main.layout {
-          flex-direction: column;
-        }
+        main.layout { flex-direction: column; }
       }
       section.panel {
         background: #1a1a1a;
@@ -63,11 +60,11 @@
         height: 32px;
         padding: 0;
       }
-      .brushes {
+      .tool-row {
         display: flex;
         flex-wrap: wrap;
         gap: 4px;
-        margin-top: 6px;
+        margin-top: 4px;
         margin-bottom: 4px;
       }
       canvas.export {
@@ -80,7 +77,6 @@
       }
       #status {
         font-size: 0.8rem;
-        margin-top: 4px;
         min-height: 1.2em;
       }
       #debug {
@@ -96,13 +92,13 @@
   </head>
   <body>
     <main class="layout">
-      <!-- Left: main canvas + painting controls -->
-      <section class="panel" id="leftPanel">
-        <h1>Flue-Genie – mark up your photo</h1>
+      <section class="panel">
+        <h1>Flue-Genie – mark geometry</h1>
         <div class="controls-row">
           <input type="file" id="file" accept="image/*">
           <button id="togglePan">Pan: OFF</button>
-          <button id="clearMask">Clear paint</button>
+          <button id="resetView">Reset view</button>
+          <button id="clearShapes">Clear shapes</button>
         </div>
 
         <canvas id="scene"></canvas>
@@ -111,7 +107,6 @@
           <div id="arrows">
             <button data-pan="up">▲</button>
             <button data-pan="left">◀</button>
-            <button data-pan="reset">⟳</button>
             <button data-pan="right">▶</button>
             <button data-pan="down">▼</button>
           </div>
@@ -121,22 +116,22 @@
           </div>
         </div>
 
-        <div class="brushes">
-          <span style="font-size:0.8rem;">Brush:</span>
-          <button id="brushFlue">Flue (red)</button>
-          <button id="brushOpen">Opening (yellow)</button>
-          <button id="brushReveal">Reveal (orange)</button>
-          <button id="brushDownpipe">Downpipe (green)</button>
-          <button id="brushLintel">Lintel (blue)</button>
-          <button id="brushOther">Other (grey)</button>
+        <div class="tool-row">
+          <span style="font-size:0.8rem;">Tool:</span>
+          <button data-tool="flue">Flue circle</button>
+          <button data-tool="opening">Opening (window/vent)</button>
+          <button data-tool="downpipe">Downpipe / soil pipe</button>
+          <button data-tool="soffit">Soffit / eaves</button>
+          <button data-tool="boundary">Boundary</button>
+          <button data-tool="reveal">Reveal</button>
+          <button id="undo">Undo last</button>
         </div>
 
         <button id="generate">Generate overlays</button>
         <p id="status"></p>
       </section>
 
-      <!-- Right: generated images + debug -->
-      <section class="panel" id="rightPanel">
+      <section class="panel">
         <h2>Standard terminal – no-go zones</h2>
         <canvas id="standardMap" class="export"></canvas>
         <button id="downloadStandard" disabled>Download standard map</button>
@@ -153,4 +148,3 @@
     <script src="app.js"></script>
   </body>
 </html>
-
