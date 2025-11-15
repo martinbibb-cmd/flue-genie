@@ -1,8 +1,13 @@
 // type Calibration = {
 //   pxPerMm: number;
-//   source: "calibrationSheet" | "mock";
+//   source: "calibrationSheet" | "plumbLine" | "mock";
 //   sheetCornersPx: { tl: [number, number]; tr: [number, number]; br: [number, number]; bl: [number, number] };
 //   homography: number[]; // 3x3 flattened
+//   sheetWidthMm: number;
+//   sheetHeightMm: number;
+//   plumbTopPx?: [number, number];
+//   plumbBottomPx?: [number, number];
+//   plumbLengthMm?: number;
 // };
 
 // type BoilerChoice = {
@@ -56,6 +61,12 @@ const job = {
 const sheetConfig = {
   widthMm: 210,
   heightMm: 297,
+};
+
+// Global plumb-line config
+const plumbConfig = {
+  enabled: false,
+  lengthMm: 400,
 };
 
 let boilerModels = [];
@@ -122,6 +133,26 @@ function resetJob() {
 function toNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function recalcScaleFromPlumb() {
+  if (!plumbConfig.enabled) return;
+  const calibration = job.calibration;
+  if (!calibration) return;
+  const top = calibration.plumbTopPx;
+  const bottom = calibration.plumbBottomPx;
+  const lengthMm = calibration.plumbLengthMm || plumbConfig.lengthMm;
+  if (!top || !bottom || !lengthMm) return;
+
+  const dx = bottom[0] - top[0];
+  const dy = bottom[1] - top[1];
+  const distPx = Math.hypot(dx, dy);
+  if (distPx <= 0) return;
+
+  const pxPerMm = distPx / lengthMm;
+  calibration.pxPerMm = pxPerMm;
+  calibration.plumbLengthMm = lengthMm;
+  calibration.source = "plumbLine";
 }
 
 function parseCSV(text) {
@@ -450,10 +481,16 @@ function renderBoilerStep1() {
       </div>
       <div class="control-card">
         <h3>Preview</h3>
-        <div class="image-preview" id="boilerImagePreview">${
-          job.image ? `<img src="${job.image}" alt="Boiler workflow preview">` : "<span class=\"hint\">No image selected yet.</span>"
-        }</div>
+        <div class="image-preview" id="boilerImagePreview"></div>
       </div>
+    </div>
+    <div class="plumb-tools">
+      <p class="hint">
+        Optional: if a red plumb line is visible in the photo, tap <strong>"Mark plumb line"</strong> then tap the <strong>top</strong>
+        of the string and then the <strong>bottom</strong>. The app will use this to refine scale.
+      </p>
+      <button type="button" id="markPlumbBtn">Mark plumb line</button>
+      <span id="plumbStatus" class="hint"></span>
     </div>
     <div class="flow-actions">
       <button class="btn secondary" data-nav="home">Cancel</button>
@@ -467,10 +504,145 @@ function renderBoilerStep1() {
   const fileInput = root.querySelector("#boilerImageInput");
   const preview = root.querySelector("#boilerImagePreview");
   const detectBtn = root.querySelector("#boilerDetectBtn");
+  const markPlumbBtn = root.querySelector("#markPlumbBtn");
+  const plumbStatus = root.querySelector("#plumbStatus");
+
+  let boilerPreviewCanvas = null;
+  let previewImage = null;
+  let plumbMarkMode = false;
+  let plumbClickStage = 0;
+
+  const updatePlumbStatus = (message) => {
+    if (plumbStatus) plumbStatus.textContent = message;
+  };
+
+  const syncPlumbStatus = () => {
+    if (!plumbStatus) return;
+    const top = job.calibration?.plumbTopPx;
+    const bottom = job.calibration?.plumbBottomPx;
+    if (top && bottom) {
+      const pxPerMm = Number.isFinite(job.calibration.pxPerMm)
+        ? job.calibration.pxPerMm.toFixed(3)
+        : "?";
+      const length = job.calibration.plumbLengthMm ?? plumbConfig.lengthMm;
+      const message = `Plumb line marked (${length} mm → ${pxPerMm} px/mm).`;
+      plumbStatus.textContent = plumbConfig.enabled ? message : `${message} (disabled in Settings)`;
+    } else {
+      plumbStatus.textContent = "";
+    }
+  };
+
+  const renderPreviewImage = () => {
+    if (!boilerPreviewCanvas || !previewImage) return;
+    drawImageToCanvas(boilerPreviewCanvas, previewImage);
+    const ctx = boilerPreviewCanvas.getContext("2d");
+    if (!ctx) return;
+    const top = job.calibration?.plumbTopPx;
+    const bottom = job.calibration?.plumbBottomPx;
+    if (!top && !bottom) return;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(220, 38, 38, 0.85)";
+    ctx.fillStyle = "rgba(220, 38, 38, 0.9)";
+    ctx.lineWidth = 2;
+    if (top && bottom) {
+      ctx.beginPath();
+      ctx.moveTo(top[0], top[1]);
+      ctx.lineTo(bottom[0], bottom[1]);
+      ctx.stroke();
+    }
+    const drawPoint = (point) => {
+      if (!point) return;
+      ctx.beginPath();
+      ctx.arc(point[0], point[1], 4, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawPoint(top);
+    drawPoint(bottom);
+    ctx.restore();
+  };
+
+  const handleCanvasClick = (event) => {
+    if (!plumbMarkMode || !boilerPreviewCanvas) return;
+    const rect = boilerPreviewCanvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    if (!job.calibration) {
+      job.calibration = {
+        pxPerMm: 4.0,
+        source: "mock",
+        sheetCornersPx: {
+          tl: [0, 0],
+          tr: [0, 0],
+          br: [0, 0],
+          bl: [0, 0],
+        },
+        homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        sheetWidthMm: sheetConfig.widthMm,
+        sheetHeightMm: sheetConfig.heightMm,
+      };
+    }
+
+    if (plumbClickStage === 1) {
+      job.calibration.plumbTopPx = [x, y];
+      delete job.calibration.plumbBottomPx;
+      job.calibration.plumbLengthMm = plumbConfig.lengthMm;
+      plumbClickStage = 2;
+      updatePlumbStatus("Now tap the BOTTOM of the plumb line...");
+      renderPreviewImage();
+      return;
+    }
+
+    if (plumbClickStage === 2) {
+      job.calibration.plumbBottomPx = [x, y];
+      job.calibration.plumbLengthMm = plumbConfig.lengthMm;
+      plumbMarkMode = false;
+      plumbClickStage = 0;
+      recalcScaleFromPlumb();
+      renderPreviewImage();
+      syncPlumbStatus();
+      return;
+    }
+  };
+
+  const refreshPreview = () => {
+    if (!preview) return;
+    if (!job.image) {
+      preview.innerHTML = '<span class="hint">No image selected yet.</span>';
+      boilerPreviewCanvas = null;
+      previewImage = null;
+      plumbMarkMode = false;
+      plumbClickStage = 0;
+      updatePlumbStatus("");
+      return;
+    }
+
+    preview.innerHTML = '<canvas id="boilerPreviewCanvas" class="preview-canvas"></canvas>';
+    boilerPreviewCanvas = preview.querySelector("#boilerPreviewCanvas");
+    previewImage = null;
+    if (!boilerPreviewCanvas) return;
+    boilerPreviewCanvas.addEventListener("click", handleCanvasClick);
+    loadImage(job.image)
+      .then((img) => {
+        if (boilerPreviewCanvas) {
+          previewImage = img;
+          renderPreviewImage();
+          syncPlumbStatus();
+        }
+      })
+      .catch(() => {
+        preview.innerHTML = '<span class="hint">Unable to load image preview.</span>';
+        boilerPreviewCanvas = null;
+        previewImage = null;
+      });
+  };
 
   if (job.image && detectBtn) {
     detectBtn.disabled = false;
   }
+
+  refreshPreview();
 
   if (fileInput) {
     fileInput.addEventListener("change", (event) => {
@@ -481,12 +653,30 @@ function renderBoilerStep1() {
       reader.onload = (e) => {
         resetJob();
         job.image = e.target?.result || null;
-        if (job.image && preview) {
-          preview.innerHTML = `<img src="${job.image}" alt="Boiler workflow preview">`;
-        }
+        refreshPreview();
         if (detectBtn) detectBtn.disabled = !job.image;
       };
       reader.readAsDataURL(file);
+    });
+  }
+
+  if (markPlumbBtn) {
+    markPlumbBtn.addEventListener("click", () => {
+      if (!plumbConfig.enabled) {
+        updatePlumbStatus("Enable plumb line in Settings first.");
+        return;
+      }
+      if (!job.image) {
+        updatePlumbStatus("Select an image first.");
+        return;
+      }
+      if (!boilerPreviewCanvas) {
+        updatePlumbStatus("Image preview not ready yet.");
+        return;
+      }
+      plumbMarkMode = true;
+      plumbClickStage = 1;
+      updatePlumbStatus("Tap the TOP of the plumb line...");
     });
   }
 
@@ -520,7 +710,9 @@ function renderBoilerStep1() {
         const pxPerMmW = distPxWidth / c.sheetWidthMm;
         const pxPerMmH = distPxHeight / c.sheetHeightMm;
         c.pxPerMm = (pxPerMmW + pxPerMmH) / 2;
+        c.source = "calibrationSheet";
       })();
+      recalcScaleFromPlumb();
       // TODO: replace with real QR detection / calibration later.
       setView("boilerStep2");
     });
@@ -880,10 +1072,16 @@ function renderFlueStep1() {
       </div>
       <div class="control-card">
         <h3>Preview</h3>
-        <div class="image-preview" id="flueImagePreview">${
-          job.image ? `<img src="${job.image}" alt="Flue workflow preview">` : "<span class=\"hint\">No image selected yet.</span>"
-        }</div>
+        <div class="image-preview" id="flueImagePreview"></div>
       </div>
+    </div>
+    <div class="plumb-tools">
+      <p class="hint">
+        Optional: if a red plumb line is visible in the photo, tap <strong>"Mark plumb line"</strong> then tap the <strong>top</strong>
+        of the string and then the <strong>bottom</strong>. The app will use this to refine scale.
+      </p>
+      <button type="button" id="flueMarkPlumbBtn">Mark plumb line</button>
+      <span id="fluePlumbStatus" class="hint"></span>
     </div>
     <div class="flow-actions">
       <button class="btn secondary" data-nav="home">Cancel</button>
@@ -897,8 +1095,143 @@ function renderFlueStep1() {
   const fileInput = root.querySelector("#flueImageInput");
   const preview = root.querySelector("#flueImagePreview");
   const detectBtn = root.querySelector("#flueDetectBtn");
+  const markPlumbBtn = root.querySelector("#flueMarkPlumbBtn");
+  const plumbStatus = root.querySelector("#fluePlumbStatus");
+
+  let fluePreviewCanvas = null;
+  let previewImage = null;
+  let plumbMarkMode = false;
+  let plumbClickStage = 0;
+
+  const updatePlumbStatus = (message) => {
+    if (plumbStatus) plumbStatus.textContent = message;
+  };
+
+  const syncPlumbStatus = () => {
+    if (!plumbStatus) return;
+    const top = job.calibration?.plumbTopPx;
+    const bottom = job.calibration?.plumbBottomPx;
+    if (top && bottom) {
+      const pxPerMm = Number.isFinite(job.calibration.pxPerMm)
+        ? job.calibration.pxPerMm.toFixed(3)
+        : "?";
+      const length = job.calibration.plumbLengthMm ?? plumbConfig.lengthMm;
+      const message = `Plumb line marked (${length} mm → ${pxPerMm} px/mm).`;
+      plumbStatus.textContent = plumbConfig.enabled ? message : `${message} (disabled in Settings)`;
+    } else {
+      plumbStatus.textContent = "";
+    }
+  };
+
+  const renderPreviewImage = () => {
+    if (!fluePreviewCanvas || !previewImage) return;
+    drawImageToCanvas(fluePreviewCanvas, previewImage);
+    const ctx = fluePreviewCanvas.getContext("2d");
+    if (!ctx) return;
+    const top = job.calibration?.plumbTopPx;
+    const bottom = job.calibration?.plumbBottomPx;
+    if (!top && !bottom) return;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(220, 38, 38, 0.85)";
+    ctx.fillStyle = "rgba(220, 38, 38, 0.9)";
+    ctx.lineWidth = 2;
+    if (top && bottom) {
+      ctx.beginPath();
+      ctx.moveTo(top[0], top[1]);
+      ctx.lineTo(bottom[0], bottom[1]);
+      ctx.stroke();
+    }
+    const drawPoint = (point) => {
+      if (!point) return;
+      ctx.beginPath();
+      ctx.arc(point[0], point[1], 4, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawPoint(top);
+    drawPoint(bottom);
+    ctx.restore();
+  };
+
+  const handleCanvasClick = (event) => {
+    if (!plumbMarkMode || !fluePreviewCanvas) return;
+    const rect = fluePreviewCanvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    if (!job.calibration) {
+      job.calibration = {
+        pxPerMm: 4.0,
+        source: "mock",
+        sheetCornersPx: {
+          tl: [0, 0],
+          tr: [0, 0],
+          br: [0, 0],
+          bl: [0, 0],
+        },
+        homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        sheetWidthMm: sheetConfig.widthMm,
+        sheetHeightMm: sheetConfig.heightMm,
+      };
+    }
+
+    if (plumbClickStage === 1) {
+      job.calibration.plumbTopPx = [x, y];
+      delete job.calibration.plumbBottomPx;
+      job.calibration.plumbLengthMm = plumbConfig.lengthMm;
+      plumbClickStage = 2;
+      updatePlumbStatus("Now tap the BOTTOM of the plumb line...");
+      renderPreviewImage();
+      return;
+    }
+
+    if (plumbClickStage === 2) {
+      job.calibration.plumbBottomPx = [x, y];
+      job.calibration.plumbLengthMm = plumbConfig.lengthMm;
+      plumbMarkMode = false;
+      plumbClickStage = 0;
+      recalcScaleFromPlumb();
+      renderPreviewImage();
+      syncPlumbStatus();
+      return;
+    }
+  };
+
+  const refreshPreview = () => {
+    if (!preview) return;
+    if (!job.image) {
+      preview.innerHTML = '<span class="hint">No image selected yet.</span>';
+      fluePreviewCanvas = null;
+      previewImage = null;
+      plumbMarkMode = false;
+      plumbClickStage = 0;
+      updatePlumbStatus("");
+      return;
+    }
+
+    preview.innerHTML = '<canvas id="fluePreviewCanvas" class="preview-canvas"></canvas>';
+    fluePreviewCanvas = preview.querySelector("#fluePreviewCanvas");
+    previewImage = null;
+    if (!fluePreviewCanvas) return;
+    fluePreviewCanvas.addEventListener("click", handleCanvasClick);
+    loadImage(job.image)
+      .then((img) => {
+        if (fluePreviewCanvas) {
+          previewImage = img;
+          renderPreviewImage();
+          syncPlumbStatus();
+        }
+      })
+      .catch(() => {
+        preview.innerHTML = '<span class="hint">Unable to load image preview.</span>';
+        fluePreviewCanvas = null;
+        previewImage = null;
+      });
+  };
 
   if (job.image && detectBtn) detectBtn.disabled = false;
+
+  refreshPreview();
 
   if (fileInput) {
     fileInput.addEventListener("change", (event) => {
@@ -909,12 +1242,30 @@ function renderFlueStep1() {
       reader.onload = (e) => {
         resetJob();
         job.image = e.target?.result || null;
-        if (job.image && preview) {
-          preview.innerHTML = `<img src="${job.image}" alt="Flue workflow preview">`;
-        }
+        refreshPreview();
         if (detectBtn) detectBtn.disabled = !job.image;
       };
       reader.readAsDataURL(file);
+    });
+  }
+
+  if (markPlumbBtn) {
+    markPlumbBtn.addEventListener("click", () => {
+      if (!plumbConfig.enabled) {
+        updatePlumbStatus("Enable plumb line in Settings first.");
+        return;
+      }
+      if (!job.image) {
+        updatePlumbStatus("Select an image first.");
+        return;
+      }
+      if (!fluePreviewCanvas) {
+        updatePlumbStatus("Image preview not ready yet.");
+        return;
+      }
+      plumbMarkMode = true;
+      plumbClickStage = 1;
+      updatePlumbStatus("Tap the TOP of the plumb line...");
     });
   }
 
@@ -947,7 +1298,9 @@ function renderFlueStep1() {
         const pxPerMmW = distPxWidth / c.sheetWidthMm;
         const pxPerMmH = distPxHeight / c.sheetHeightMm;
         c.pxPerMm = (pxPerMmW + pxPerMmH) / 2;
+        c.source = "calibrationSheet";
       })();
+      recalcScaleFromPlumb();
       setView("flueStep2");
     });
   }
@@ -981,6 +1334,25 @@ function renderSettings() {
         <p id="sheetScaleInfo" class="hint"></p>
       </section>
 
+      <section class="settings-section">
+        <h3>Plumb line (optional)</h3>
+        <p class="hint">
+          If you use a red plumb line for calibration, enable it here and set the physical string length. In a photo you can
+          mark the top and bottom of the string and the app will compute scale directly from that length.
+        </p>
+        <label class="inline">
+          <input type="checkbox" id="plumbEnabledCheckbox">
+          Use plumb line when available
+        </label>
+        <label>
+          Plumb line length (mm)
+          <input type="number" id="plumbLengthInput" min="50" max="2000" step="10">
+        </label>
+        <p class="hint">
+          Recommended: 400 mm (easy to measure and long enough to be accurate).
+        </p>
+      </section>
+
       <button type="button" id="settingsBackBtn">Back</button>
     </div>
   `;
@@ -988,12 +1360,71 @@ function renderSettings() {
   const widthInput = document.getElementById("sheetWidthMmInput");
   const heightInput = document.getElementById("sheetHeightMmInput");
   const info = document.getElementById("sheetScaleInfo");
+  const plumbEnabledCheckbox = document.getElementById("plumbEnabledCheckbox");
+  const plumbLengthInput = document.getElementById("plumbLengthInput");
 
-  if (!widthInput || !heightInput) return;
+  if (!widthInput || !heightInput || !plumbEnabledCheckbox || !plumbLengthInput) return;
 
   // Initialise from global sheetConfig
   widthInput.value = String(sheetConfig.widthMm);
   heightInput.value = String(sheetConfig.heightMm);
+  plumbEnabledCheckbox.checked = plumbConfig.enabled;
+  plumbLengthInput.value = String(plumbConfig.lengthMm);
+
+  const refreshCalibrationInfo = (wMm, hMm) => {
+    if (!info) return;
+    if (job.calibration) {
+      if (
+        job.calibration.source === "plumbLine" &&
+        job.calibration.plumbTopPx &&
+        job.calibration.plumbBottomPx
+      ) {
+        const pxPerMm = Number.isFinite(job.calibration.pxPerMm)
+          ? job.calibration.pxPerMm.toFixed(3)
+          : "?";
+        const length = job.calibration.plumbLengthMm ?? plumbConfig.lengthMm;
+        info.textContent = `Current scale: ${pxPerMm} px/mm (plumb line ${length} mm).`;
+        return;
+      }
+      if (job.calibration.source === "calibrationSheet") {
+        const width = job.calibration.sheetWidthMm ?? wMm;
+        const height = job.calibration.sheetHeightMm ?? hMm;
+        const pxPerMm = Number.isFinite(job.calibration.pxPerMm)
+          ? job.calibration.pxPerMm.toFixed(3)
+          : "?";
+        info.textContent = `Current scale: ${pxPerMm} px/mm (sheet ${width} × ${height} mm).`;
+        return;
+      }
+      if (Number.isFinite(job.calibration.pxPerMm)) {
+        info.textContent = `Current scale: ${job.calibration.pxPerMm.toFixed(3)} px/mm.`;
+        return;
+      }
+    }
+    info.textContent = `Sheet dimensions set to ${wMm} × ${hMm} mm. Calibration will use these once a sheet is detected.`;
+  };
+
+  const recomputeScaleFromSheet = (wMm, hMm) => {
+    if (!job.calibration || !job.calibration.sheetCornersPx) return false;
+    const { tl, tr, bl } = job.calibration.sheetCornersPx;
+    if (!tl || !tr || !bl) return false;
+
+    const dxW = tr[0] - tl[0];
+    const dyW = tr[1] - tl[1];
+    const dxH = bl[0] - tl[0];
+    const dyH = bl[1] - tl[1];
+    const distPxWidth = Math.hypot(dxW, dyW);
+    const distPxHeight = Math.hypot(dxH, dyH);
+
+    const pxPerMmW = distPxWidth / wMm;
+    const pxPerMmH = distPxHeight / hMm;
+    const pxPerMm = (pxPerMmW + pxPerMmH) / 2;
+
+    job.calibration.pxPerMm = pxPerMm;
+    job.calibration.sheetWidthMm = wMm;
+    job.calibration.sheetHeightMm = hMm;
+    job.calibration.source = "calibrationSheet";
+    return true;
+  };
 
   const updateSheetConfig = () => {
     const wMm = Number(widthInput.value) || 210;
@@ -1002,43 +1433,37 @@ function renderSettings() {
     sheetConfig.widthMm = wMm;
     sheetConfig.heightMm = hMm;
 
-    // If a calibration exists with corner positions, recompute pxPerMm
-    if (job.calibration && job.calibration.sheetCornersPx) {
-      const { tl, tr, bl } = job.calibration.sheetCornersPx;
-      if (tl && tr && bl) {
-        const dxW = tr[0] - tl[0];
-        const dyW = tr[1] - tl[1];
-        const dxH = bl[0] - tl[0];
-        const dyH = bl[1] - tl[1];
-        const distPxWidth = Math.hypot(dxW, dyW);
-        const distPxHeight = Math.hypot(dxH, dyH);
-
-        const pxPerMmW = distPxWidth / wMm;
-        const pxPerMmH = distPxHeight / hMm;
-        const pxPerMm = (pxPerMmW + pxPerMmH) / 2;
-
-        job.calibration.pxPerMm = pxPerMm;
-        job.calibration.sheetWidthMm = wMm;
-        job.calibration.sheetHeightMm = hMm;
-        job.calibration.source = "calibrationSheet";
-
-        if (info) {
-          info.textContent = `Current scale: ${pxPerMm.toFixed(3)} px/mm (sheet ${wMm} × ${hMm} mm).`;
-        }
-        return;
-      }
-    }
-
-    if (info) {
-      info.textContent = `Sheet dimensions set to ${wMm} × ${hMm} mm. Calibration will use these once a sheet is detected.`;
-    }
+    recomputeScaleFromSheet(wMm, hMm);
+    recalcScaleFromPlumb();
+    refreshCalibrationInfo(wMm, hMm);
   };
 
   widthInput.addEventListener("input", updateSheetConfig);
   heightInput.addEventListener("input", updateSheetConfig);
 
+  const updatePlumbConfig = () => {
+    plumbConfig.enabled = !!plumbEnabledCheckbox.checked;
+    const len = Number(plumbLengthInput.value) || 400;
+    plumbConfig.lengthMm = len;
+
+    if (job.calibration) {
+      if (plumbConfig.enabled && job.calibration.plumbTopPx && job.calibration.plumbBottomPx) {
+        job.calibration.plumbLengthMm = len;
+      } else if (!plumbConfig.enabled) {
+        recomputeScaleFromSheet(sheetConfig.widthMm, sheetConfig.heightMm);
+      }
+    }
+
+    recalcScaleFromPlumb();
+    refreshCalibrationInfo(sheetConfig.widthMm, sheetConfig.heightMm);
+  };
+
+  plumbEnabledCheckbox.addEventListener("change", updatePlumbConfig);
+  plumbLengthInput.addEventListener("input", updatePlumbConfig);
+
   // Run once to show initial message
   updateSheetConfig();
+  updatePlumbConfig();
 
   const backBtn = document.getElementById("settingsBackBtn");
   if (backBtn) {
