@@ -1,5 +1,5 @@
 {
-  "name": "survey-brain-api",
+  "name": "flue-genie-ai",
   "main": "src/worker.js",
   "compatibility_date": "2025-11-12",
   "routes": [],
