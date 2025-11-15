@@ -1,0 +1,2 @@
+flueId,brand,systemName,terminalType,diameterMm,minAboveWindowMm,minBelowWindowMm,minSideWindowMm,minFromCornerMm,minBelowSoffitMm,minFromDownpipeMm,minFromBoundaryMm
+dummy,Generic,Standard horizontal,horizontal,100,300,300,300,300,300,300,300

@@ -1,0 +1,2 @@
+modelId,brand,modelName,widthMm,heightMm,depthMm,installTopMm,installBottomMm,installLeftMm,installRightMm,installFrontMm,serviceTopMm,serviceFrontMm
+std_400x700x300,Generic,Standard 400x700x300,400,700,300,10,10,5,5,5,200,600

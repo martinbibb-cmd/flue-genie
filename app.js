@@ -1,513 +1,1083 @@
-/* Flue-Genie: tap-based geometry, deterministic overlays */
+// type Calibration = {
+//   pxPerMm: number;
+//   source: "calibrationSheet" | "mock";
+//   sheetCornersPx: { tl: [number, number]; tr: [number, number]; br: [number, number]; bl: [number, number] };
+//   homography: number[]; // 3x3 flattened
+// };
 
-/* Clearances in mm, edge-to-edge from obstruction to flue edge */
-const CLEARANCES_MM = {
-  opening: 300,
-  reveal: 150,
-  downpipe: 75,
-  soffit: 75,
-  boundary: 600,
-  lintel: 0 // handled specially
+// type BoilerChoice = {
+//   modelId: string;
+//   widthMm: number;
+//   heightMm: number;
+//   depthMm: number;
+//   install: { top: number; bottom: number; left: number; right: number; front: number };
+//   service: { top: number; front: number };
+//   sheetDepthFromWallMm: number;
+// };
+
+// type BoilerObstacle = {
+//   kind: "leftTall" | "rightTall" | "wallUnit" | "worktop" | "ceiling";
+//   x: number;
+//   y: number;
+// };
+
+// type FlueObstacle = {
+//   kind: "window" | "downpipe" | "boundary" | "soffit";
+//   x: number;
+//   y: number;
+// };
+
+// type FlueMark = {
+//   x: number;
+//   y: number;
+//   diameterMm: number;
+// };
+
+// type Job = {
+//   image: string | null;
+//   calibration: Calibration | null;
+//   boiler: BoilerChoice | null;
+//   boilerObstacles: BoilerObstacle[];
+//   flue: FlueMark | null;
+//   flueObstacles: FlueObstacle[];
+// };
+
+const job = {
+  image: null,
+  calibration: null,
+  boiler: null,
+  boilerObstacles: [],
+  flue: null,
+  flueObstacles: [],
 };
 
-/* DOM elements */
-const fileInput = document.getElementById("file");
-const scene = document.getElementById("scene");
-const ctx = scene.getContext("2d");
+let boilerModels = [];
+let flueOptions = [];
+let boilerPlacement = null; // stored in image pixel space
+let selectedFlueId = null;
 
-const togglePanBtn = document.getElementById("togglePan");
-const resetViewBtn = document.getElementById("resetView");
-const clearShapesBtn = document.getElementById("clearShapes");
-const generateBtn = document.getElementById("generate");
-const statusEl = document.getElementById("status");
-const debugEl = document.getElementById("debug");
+const boilerObstacleKinds = [
+  { kind: "leftTall", label: "Left tall unit", color: "#8e5b3a" },
+  { kind: "rightTall", label: "Right tall unit", color: "#8e5b3a" },
+  { kind: "wallUnit", label: "Wall unit above", color: "#e67e22" },
+  { kind: "worktop", label: "Worktop/base units", color: "#f1c40f" },
+  { kind: "ceiling", label: "Ceiling/bulkhead", color: "#9b59b6" },
+];
 
-const arrows = document.getElementById("arrows");
-const zoomBtns = document.querySelectorAll("[data-zoom]");
+const flueObstacleKinds = [
+  { kind: "window", label: "Window / opening", color: "#e67e22" },
+  { kind: "downpipe", label: "Downpipe", color: "#3498db" },
+  { kind: "boundary", label: "Boundary/corner", color: "#2ecc71" },
+  { kind: "soffit", label: "Soffit/eaves", color: "#9b59b6" },
+];
 
-const stdCanvas = document.getElementById("standardMap");
-const plumeCanvas = document.getElementById("plumeMap");
-const dlStdBtn = document.getElementById("downloadStandard");
-const dlPlumeBtn = document.getElementById("downloadPlume");
+const fallbackBoilerModel = {
+  modelId: "std_400x700x300",
+  brand: "Generic",
+  modelName: "Standard 400×700×300",
+  widthMm: 400,
+  heightMm: 700,
+  depthMm: 300,
+  install: { top: 10, bottom: 10, left: 5, right: 5, front: 5 },
+  service: { top: 200, front: 600 },
+};
 
-/* Scene image & view state */
-let img = new Image();
-let imgW = 0;
-let imgH = 0;
-let imgLoaded = false;
-let scale = 1;
-let ox = 0;
-let oy = 0;
+const fallbackFlueOption = {
+  flueId: "dummy",
+  brand: "Generic",
+  systemName: "Standard horizontal",
+  terminalType: "horizontal",
+  diameterMm: 100,
+  rules: {
+    minAboveWindowMm: 300,
+    minBelowWindowMm: 300,
+    minSideWindowMm: 300,
+    minFromCornerMm: 300,
+    minBelowSoffitMm: 300,
+    minFromDownpipeMm: 300,
+    minFromBoundaryMm: 300,
+  },
+};
 
-const ZOOM_STEP = 1.12;
+const boilerNumericFields = [
+  "widthMm",
+  "heightMm",
+  "depthMm",
+  "installTopMm",
+  "installBottomMm",
+  "installLeftMm",
+  "installRightMm",
+  "installFrontMm",
+  "serviceTopMm",
+  "serviceFrontMm",
+];
 
-/* Geometry model */
-let flueCircle = null; // { cx, cy, r }
-let openings = [];     // [{ x1,y1,x2,y2 }]
-let lines = [];        // [{ x1,y1,x2,y2, kind }]
+const flueNumericFields = [
+  "diameterMm",
+  "minAboveWindowMm",
+  "minBelowWindowMm",
+  "minSideWindowMm",
+  "minFromCornerMm",
+  "minBelowSoffitMm",
+  "minFromDownpipeMm",
+  "minFromBoundaryMm",
+];
 
-/* Interaction state */
-let panMode = false;
-let currentTool = "flue"; // "flue"|"opening"|"downpipe"|"soffit"|"boundary"|"reveal"
-let activeStep = null;    // for 2-click shapes
-let activePreview = null; // for previews
-let activePointerId = null;
-let lastPanPt = null;
+const viewRoot = () => document.getElementById("view-root");
 
-/* Helpers to convert between screen and image coords */
-function scenePointFromEvent(e) {
-  const r = scene.getBoundingClientRect();
-  const canvasX = (e.clientX - r.left) * (scene.width / r.width);
-  const canvasY = (e.clientY - r.top) * (scene.height / r.height);
-  const x = (canvasX / scale) - ox;
-  const y = (canvasY / scale) - oy;
-  return { x, y };
+function resetJob() {
+  job.image = null;
+  job.calibration = null;
+  job.boiler = null;
+  job.boilerObstacles = [];
+  job.flue = null;
+  job.flueObstacles = [];
+  boilerPlacement = null;
+  selectedFlueId = null;
 }
 
-/* View transforms */
-function resetView() {
-  scale = 1;
-  ox = 0;
-  oy = 0;
-  draw();
+function toNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function pan(dx, dy) {
-  ox += dx;
-  oy += dy;
-  draw();
+function parseCSV(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = lines[0].split(",").map((h) => h.trim());
+  const rows = lines.slice(1).map((line) => line.split(",").map((v) => v.trim()));
+  return { headers, rows };
 }
 
-function zoomAt(cx, cy, factor) {
-  if (!imgLoaded) return;
-  const rect = scene.getBoundingClientRect();
-  const canvasX = (cx / rect.width) * scene.width;
-  const canvasY = (cy / rect.height) * scene.height;
-  const preX = canvasX / scale - ox;
-  const preY = canvasY / scale - oy;
-  scale *= factor;
-  const postX = canvasX / scale - ox;
-  const postY = canvasY / scale - oy;
-  ox += postX - preX;
-  oy += postY - preY;
-  draw();
+async function loadBoilerModels() {
+  try {
+    const res = await fetch("/data/boilers.csv", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    const { headers, rows } = parseCSV(text);
+    if (!rows.length || headers.length === 0) throw new Error("Empty CSV");
+    boilerModels = rows.map((values) => {
+      const record = Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
+      boilerNumericFields.forEach((field) => {
+        record[field] = toNumber(record[field]);
+      });
+      return {
+        modelId: record.modelId,
+        brand: record.brand,
+        modelName: record.modelName,
+        widthMm: record.widthMm,
+        heightMm: record.heightMm,
+        depthMm: record.depthMm,
+        install: {
+          top: record.installTopMm,
+          bottom: record.installBottomMm,
+          left: record.installLeftMm,
+          right: record.installRightMm,
+          front: record.installFrontMm,
+        },
+        service: {
+          top: record.serviceTopMm,
+          front: record.serviceFrontMm,
+        },
+      };
+    }).filter((entry) => entry.modelId && entry.brand && entry.modelName);
+    if (!boilerModels.length) throw new Error("No valid boiler models");
+  } catch (error) {
+    console.warn("Failed to load boilers.csv", error);
+    boilerModels = [fallbackBoilerModel];
+  }
 }
 
-/* Drawing */
-function clearScene() {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, scene.width, scene.height);
+async function loadFlueOptions() {
+  try {
+    const res = await fetch("/data/flues.csv", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    const { headers, rows } = parseCSV(text);
+    if (!rows.length || headers.length === 0) throw new Error("Empty CSV");
+    flueOptions = rows.map((values) => {
+      const record = Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
+      flueNumericFields.forEach((field) => {
+        record[field] = toNumber(record[field]);
+      });
+      return {
+        flueId: record.flueId,
+        brand: record.brand,
+        systemName: record.systemName,
+        terminalType: record.terminalType,
+        diameterMm: record.diameterMm,
+        rules: {
+          minAboveWindowMm: record.minAboveWindowMm,
+          minBelowWindowMm: record.minBelowWindowMm,
+          minSideWindowMm: record.minSideWindowMm,
+          minFromCornerMm: record.minFromCornerMm,
+          minBelowSoffitMm: record.minBelowSoffitMm,
+          minFromDownpipeMm: record.minFromDownpipeMm,
+          minFromBoundaryMm: record.minFromBoundaryMm,
+        },
+      };
+    }).filter((entry) => entry.flueId && entry.brand && entry.systemName);
+    if (!flueOptions.length) throw new Error("No valid flue options");
+  } catch (error) {
+    console.warn("Failed to load flues.csv", error);
+    flueOptions = [fallbackFlueOption];
+  }
 }
 
-function draw() {
-  clearScene();
-  if (!imgLoaded) return;
+function setView(viewName) {
+  const homeSection = document.getElementById("home-section");
+  const root = viewRoot();
+  if (!root) return;
+  if (viewName === "home") {
+    homeSection.hidden = false;
+    renderHome();
+    return;
+  }
+  homeSection.hidden = true;
+  switch (viewName) {
+    case "printSheet":
+      renderPrintSheet();
+      break;
+    case "boilerStep1":
+      renderBoilerStep1();
+      break;
+    case "boilerStep2":
+      renderBoilerStep2();
+      break;
+    case "boilerStep3":
+      renderBoilerStep3();
+      break;
+    case "flueStep1":
+      renderFlueStep1();
+      break;
+    case "flueStep2":
+      renderFlueStep2();
+      break;
+    case "flueStep3":
+      renderFlueStep3();
+      break;
+    default:
+      renderHome();
+  }
+}
 
-  ctx.setTransform(scale, 0, 0, scale, ox, oy);
-  ctx.drawImage(img, 0, 0);
+function renderHome() {
+  const root = viewRoot();
+  if (!root) return;
+  root.innerHTML = `<div class="view-header"><h2>Ready when the data is</h2><p class="hint">Calibration and clearance logic will drop in once services are wired. For now, explore the mock workflows.</p></div>`;
+}
 
-  // Draw existing shapes
-  ctx.lineWidth = 2 / scale;
+function renderPrintSheet() {
+  const root = viewRoot();
+  if (!root) return;
+  root.innerHTML = `
+    <div class="view-header">
+      <button class="btn secondary" data-nav="home">&larr; Back</button>
+      <h2>Print positioning sheet</h2>
+      <p class="hint">Use this A4 sheet to provide scale and orientation in your site photos. QR detection is mocked today but ready for AI calibration.</p>
+    </div>
+    <div class="stack">
+      <p>Print one copy per job site and keep it visible in every photograph. Future releases will auto-detect the QR matrix to scale measurements.</p>
+      <a href="assets/positioning-sheet-a4.pdf" download class="btn">Download A4 sheet (PDF)</a>
+    </div>
+  `;
+  const backBtn = root.querySelector("[data-nav='home']");
+  if (backBtn) backBtn.addEventListener("click", () => setView("home"));
+}
 
-  if (flueCircle) {
-    ctx.strokeStyle = "rgba(255,0,0,0.9)";
-    ctx.beginPath();
-    ctx.arc(flueCircle.cx, flueCircle.cy, flueCircle.r, 0, Math.PI * 2);
-    ctx.stroke();
+function renderBoilerStep1() {
+  const root = viewRoot();
+  if (!root) return;
+  root.innerHTML = `
+    <div class="view-header">
+      <div class="inline-group">
+        <button class="btn secondary" data-nav="home">&larr; Home</button>
+      </div>
+      <h2>Boiler positioning &mdash; Step 1</h2>
+      <p class="hint">Capture or upload an image containing the positioning sheet. Calibration is mocked with fixed px/mm for now.</p>
+    </div>
+    <div class="controls-grid">
+      <div class="control-card">
+        <label for="boilerImageInput">Site photograph</label>
+        <input type="file" id="boilerImageInput" accept="image/*">
+        <p class="hint">Images stay on-device. We only store them locally for overlay previews.</p>
+      </div>
+      <div class="control-card">
+        <h3>Preview</h3>
+        <div class="image-preview" id="boilerImagePreview">${
+          job.image ? `<img src="${job.image}" alt="Boiler workflow preview">` : "<span class=\"hint\">No image selected yet.</span>"
+        }</div>
+      </div>
+    </div>
+    <div class="flow-actions">
+      <button class="btn secondary" data-nav="home">Cancel</button>
+      <button class="btn" id="boilerDetectBtn" disabled>Detect sheet &amp; continue</button>
+    </div>
+  `;
+
+  const backButtons = root.querySelectorAll("[data-nav='home']");
+  backButtons.forEach((btn) => btn.addEventListener("click", () => setView("home")));
+
+  const fileInput = root.querySelector("#boilerImageInput");
+  const preview = root.querySelector("#boilerImagePreview");
+  const detectBtn = root.querySelector("#boilerDetectBtn");
+
+  if (job.image && detectBtn) {
+    detectBtn.disabled = false;
   }
 
-  ctx.strokeStyle = "rgba(255,255,0,0.9)";
-  openings.forEach((o) => {
-    const x = Math.min(o.x1, o.x2);
-    const y = Math.min(o.y1, o.y2);
-    const w = Math.abs(o.x2 - o.x1);
-    const h = Math.abs(o.y2 - o.y1);
-    ctx.strokeRect(x, y, w, h);
+  if (fileInput) {
+    fileInput.addEventListener("change", (event) => {
+      const target = event.target;
+      const file = target.files && target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        resetJob();
+        job.image = e.target?.result || null;
+        if (job.image && preview) {
+          preview.innerHTML = `<img src="${job.image}" alt="Boiler workflow preview">`;
+        }
+        if (detectBtn) detectBtn.disabled = !job.image;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (detectBtn) {
+    detectBtn.addEventListener("click", () => {
+      if (!job.image) return;
+      job.calibration = {
+        pxPerMm: 4.0,
+        source: "mock",
+        sheetCornersPx: {
+          tl: [100, 100],
+          tr: [400, 100],
+          br: [400, 500],
+          bl: [100, 500],
+        },
+        homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      };
+      // TODO: replace with real QR detection / calibration later.
+      setView("boilerStep2");
+    });
+  }
+}
+
+function buildBoilerChoice(model, sheetDepth) {
+  return {
+    modelId: model.modelId,
+    brand: model.brand,
+    modelName: model.modelName,
+    widthMm: model.widthMm,
+    heightMm: model.heightMm,
+    depthMm: model.depthMm,
+    install: { ...model.install },
+    service: { ...model.service },
+    sheetDepthFromWallMm: sheetDepth,
+  };
+}
+
+function renderBoilerStep2() {
+  const root = viewRoot();
+  if (!root) return;
+  if (!job.image) {
+    root.innerHTML = `<div class="view-header"><button class="btn secondary" data-nav="boilerStep1">&larr; Back</button><h2>Boiler positioning &mdash; Step 2</h2><p class="hint">Please upload a photograph first.</p></div>`;
+    const backBtn = root.querySelector("[data-nav='boilerStep1']");
+    if (backBtn) backBtn.addEventListener("click", () => setView("boilerStep1"));
+    return;
+  }
+
+  if (!job.boiler && boilerModels.length) {
+    const firstModel = boilerModels[0];
+    job.boiler = buildBoilerChoice(firstModel, 0);
+  }
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div class="inline-group">
+        <button class="btn secondary" data-nav="boilerStep1">&larr; Back</button>
+      </div>
+      <h2>Boiler positioning &mdash; Step 2</h2>
+      <p class="hint">Pick the boiler model and mark nearby cupboards, worktops, or ceilings.</p>
+    </div>
+    <div class="controls-grid split">
+      <div class="control-card">
+        <div class="stack">
+          <label for="boilerModelSelect">Boiler model</label>
+          <select id="boilerModelSelect"></select>
+          <div class="stack">
+            <label for="sheetDepthInput">Sheet depth from wall (mm)</label>
+            <input type="number" id="sheetDepthInput" min="0" step="1" value="${job.boiler?.sheetDepthFromWallMm ?? 0}">
+            <div class="inline-group" id="sheetDepthPresets">
+              <button class="btn secondary" data-depth="0">On wall (0mm)</button>
+              <button class="btn secondary" data-depth="auto">On boiler front (auto)</button>
+              <button class="btn secondary" data-depth="600">On cupboard (600mm)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="stack">
+        <div class="canvas-wrapper">
+          <canvas id="boilerCanvas" class="dashed"></canvas>
+        </div>
+        <div class="palette" id="boilerObstaclePalette"></div>
+      </div>
+    </div>
+    <div class="flow-actions">
+      <button class="btn secondary" data-nav="boilerStep1">Back</button>
+      <button class="btn" id="boilerStep2Next" ${job.boiler ? "" : "disabled"}>Next: placement</button>
+    </div>
+  `;
+
+  const modelSelect = root.querySelector("#boilerModelSelect");
+  const sheetDepthInput = root.querySelector("#sheetDepthInput");
+  const sheetDepthButtons = root.querySelectorAll("#sheetDepthPresets button");
+  const palette = root.querySelector("#boilerObstaclePalette");
+  const canvas = root.querySelector("#boilerCanvas");
+  const nextBtn = root.querySelector("#boilerStep2Next");
+  const backButtons = root.querySelectorAll("[data-nav='boilerStep1']");
+  backButtons.forEach((btn) => btn.addEventListener("click", () => setView("boilerStep1")));
+
+  if (modelSelect) {
+    boilerModels.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.modelId;
+      option.textContent = `${model.brand} ${model.modelName}`;
+      if (job.boiler && job.boiler.modelId === model.modelId) {
+        option.selected = true;
+      }
+      modelSelect.append(option);
+    });
+
+    modelSelect.addEventListener("change", () => {
+      const selected = boilerModels.find((model) => model.modelId === modelSelect.value);
+      if (!selected) return;
+      const depth = job.boiler?.sheetDepthFromWallMm ?? 0;
+      job.boiler = buildBoilerChoice(selected, depth);
+      if (sheetDepthInput) sheetDepthInput.value = String(job.boiler.sheetDepthFromWallMm);
+    });
+  }
+
+  if (sheetDepthInput) {
+    sheetDepthInput.addEventListener("change", () => {
+      if (!job.boiler) return;
+      const value = toNumber(sheetDepthInput.value);
+      job.boiler.sheetDepthFromWallMm = value;
+    });
+  }
+
+  sheetDepthButtons.forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (!job.boiler) return;
+      const depthValue = button.dataset.depth;
+      let newDepth = 0;
+      if (depthValue === "auto") {
+        newDepth = job.boiler.depthMm;
+      } else {
+        newDepth = toNumber(depthValue);
+      }
+      job.boiler.sheetDepthFromWallMm = newDepth;
+      if (sheetDepthInput) sheetDepthInput.value = String(newDepth);
+    });
   });
 
-  lines.forEach((ln) => {
-    let color = "rgba(0,255,0,0.9)";
-    if (ln.kind === "soffit") color = "rgba(0,200,255,0.9)";
-    if (ln.kind === "boundary") color = "rgba(255,0,255,0.9)";
-    if (ln.kind === "reveal") color = "rgba(255,136,0,0.9)";
-    ctx.strokeStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(ln.x1, ln.y1);
-    ctx.lineTo(ln.x2, ln.y2);
-    ctx.stroke();
+  let currentKind = null;
+  if (palette) {
+    palette.innerHTML = "";
+    boilerObstacleKinds.forEach((entry) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.kind = entry.kind;
+      button.innerHTML = `<span class="color-dot" style="background:${entry.color}"></span>${entry.label}`;
+      if (currentKind === entry.kind) button.classList.add("active");
+      button.addEventListener("click", () => {
+        currentKind = entry.kind;
+        palette.querySelectorAll("button").forEach((btn) => btn.classList.toggle("active", btn === button));
+      });
+      palette.append(button);
+    });
+  }
+
+  if (canvas) {
+    loadImage(job.image).then((img) => {
+      const drawScene = () => {
+        const info = drawImageToCanvas(canvas, img);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        job.boilerObstacles.forEach((obstacle) => {
+          const colorEntry = boilerObstacleKinds.find((entry) => entry.kind === obstacle.kind);
+          ctx.fillStyle = colorEntry?.color || "#333";
+          ctx.beginPath();
+          ctx.arc(obstacle.x, obstacle.y, 6, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      };
+      drawScene();
+      canvas.addEventListener("click", (event) => {
+        if (!currentKind) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (event.clientX - rect.left) * scaleX;
+        const y = (event.clientY - rect.top) * scaleY;
+        job.boilerObstacles.push({ kind: currentKind, x, y });
+        drawScene();
+      });
+    });
+  }
+
+  if (nextBtn) {
+    nextBtn.disabled = !job.boiler;
+    nextBtn.addEventListener("click", () => {
+      if (!job.boiler) return;
+      setView("boilerStep3");
+    });
+  }
+}
+
+function renderBoilerStep3() {
+  const root = viewRoot();
+  if (!root) return;
+  if (!job.image || !job.calibration || !job.boiler) {
+    root.innerHTML = `<div class="view-header"><button class="btn secondary" data-nav="boilerStep2">&larr; Back</button><h2>Boiler positioning &mdash; Step 3</h2><p class="hint">Complete the previous steps first.</p></div>`;
+    const backBtn = root.querySelector("[data-nav='boilerStep2']");
+    if (backBtn) backBtn.addEventListener("click", () => setView("boilerStep2"));
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div class="inline-group">
+        <button class="btn secondary" data-nav="boilerStep2">&larr; Back</button>
+      </div>
+      <h2>Boiler positioning &mdash; Step 3</h2>
+      <p class="hint">Move the boiler overlay into position. Aura colours are placeholders until clearance logic is connected.</p>
+    </div>
+    <div class="stack">
+      <div class="canvas-wrapper">
+        <canvas id="boilerCanvasStep3" class="dashed"></canvas>
+      </div>
+      <div class="arrow-pad" id="boilerArrowPad">
+        <span></span><button data-direction="up">&uarr;</button><span></span>
+        <button data-direction="left">&larr;</button><span></span><button data-direction="right">&rarr;</button>
+        <span></span><button data-direction="down">&darr;</button><span></span>
+      </div>
+      <div class="status-panel" id="boilerStatusPanel"></div>
+    </div>
+    <div class="flow-actions">
+      <button class="btn" id="boilerSnapshot">Save snapshot</button>
+      <button class="btn secondary" id="boilerRestart">Start again</button>
+    </div>
+  `;
+
+  const canvas = root.querySelector("#boilerCanvasStep3");
+  const statusPanel = root.querySelector("#boilerStatusPanel");
+  const arrowPad = root.querySelectorAll("#boilerArrowPad button[data-direction]");
+  const snapshotBtn = root.querySelector("#boilerSnapshot");
+  const restartBtn = root.querySelector("#boilerRestart");
+  const backBtn = root.querySelector("[data-nav='boilerStep2']");
+  if (backBtn) backBtn.addEventListener("click", () => setView("boilerStep2"));
+
+  if (!canvas) return;
+  loadImage(job.image).then((img) => {
+    const drawScene = () => {
+      const info = drawImageToCanvas(canvas, img);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const scale = info.scale;
+      if (!boilerPlacement) {
+        const corners = job.calibration?.sheetCornersPx;
+        if (corners) {
+          const cx = (corners.tl[0] + corners.br[0]) / 2;
+          const cy = (corners.tl[1] + corners.br[1]) / 2;
+          boilerPlacement = { x: cx, y: cy };
+        } else {
+          boilerPlacement = { x: img.width / 2, y: img.height / 2 };
+        }
+      }
+
+      const widthPx = job.boiler.widthMm * job.calibration.pxPerMm;
+      const heightPx = job.boiler.heightMm * job.calibration.pxPerMm;
+      const auraMarginPx = 200 * job.calibration.pxPerMm;
+
+      const centerX = boilerPlacement.x * scale;
+      const centerY = boilerPlacement.y * scale;
+      const boilerWidth = widthPx * scale;
+      const boilerHeight = heightPx * scale;
+      const aura = auraMarginPx * scale;
+
+      ctx.fillStyle = "rgba(46, 204, 113, 0.2)";
+      ctx.fillRect(
+        centerX - boilerWidth / 2 - aura,
+        centerY - boilerHeight / 2 - aura,
+        boilerWidth + aura * 2,
+        boilerHeight + aura * 2,
+      );
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.strokeStyle = "rgba(15, 23, 42, 0.7)";
+      ctx.lineWidth = 2;
+      ctx.fillRect(centerX - boilerWidth / 2, centerY - boilerHeight / 2, boilerWidth, boilerHeight);
+      ctx.strokeRect(centerX - boilerWidth / 2, centerY - boilerHeight / 2, boilerWidth, boilerHeight);
+
+      // TODO: once CSV clearances and AI geometry are wired:
+      // - Use job.boilerObstacles as limit lines (leftTall/rightTall/wallUnit/worktop/ceiling).
+      // - Compare distances from boiler aura to these limits using actual install/service values.
+      // - Change aura colour to green/amber/red accordingly.
+
+      if (statusPanel) {
+        statusPanel.innerHTML = `
+          <div><strong>Boiler:</strong> ${job.boiler.brand} ${job.boiler.modelName}</div>
+          <div>Size: ${job.boiler.widthMm}mm × ${job.boiler.heightMm}mm × ${job.boiler.depthMm}mm</div>
+          <div>Sheet depth reference: ${job.boiler.sheetDepthFromWallMm}mm</div>
+          <div class="badge-amber">Clearance checks pending CSV rules</div>
+        `;
+      }
+    };
+
+    drawScene();
+
+    arrowPad.forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (!boilerPlacement) return;
+        const nudgeMm = 10;
+        const nudgePx = nudgeMm * job.calibration.pxPerMm;
+        const direction = button.dataset.direction;
+        if (direction === "up") boilerPlacement.y -= nudgePx;
+        if (direction === "down") boilerPlacement.y += nudgePx;
+        if (direction === "left") boilerPlacement.x -= nudgePx;
+        if (direction === "right") boilerPlacement.x += nudgePx;
+        drawScene();
+      });
+    });
+
+    if (snapshotBtn) {
+      snapshotBtn.addEventListener("click", () => {
+        downloadCanvasImage(canvas, "boiler-overlay.png");
+      });
+    }
   });
 
-  // Draw preview shape if any
-  if (activePreview) {
-    ctx.setLineDash([6 / scale, 4 / scale]);
-    const p = activePreview;
-    if (p.type === "circle") {
-      ctx.strokeStyle = "rgba(255,0,0,0.5)";
+  if (restartBtn) {
+    restartBtn.addEventListener("click", () => {
+      resetJob();
+      setView("home");
+    });
+  }
+}
+
+function renderFlueStep1() {
+  const root = viewRoot();
+  if (!root) return;
+  root.innerHTML = `
+    <div class="view-header">
+      <div class="inline-group">
+        <button class="btn secondary" data-nav="home">&larr; Home</button>
+      </div>
+      <h2>Flue positioning &mdash; Step 1</h2>
+      <p class="hint">Upload an exterior photo with the positioning sheet. Calibration will be mocked until AI detection lands.</p>
+    </div>
+    <div class="controls-grid">
+      <div class="control-card">
+        <label for="flueImageInput">Site photograph</label>
+        <input type="file" id="flueImageInput" accept="image/*">
+        <p class="hint">Flue clearance checks will read CSV rules once populated.</p>
+      </div>
+      <div class="control-card">
+        <h3>Preview</h3>
+        <div class="image-preview" id="flueImagePreview">${
+          job.image ? `<img src="${job.image}" alt="Flue workflow preview">` : "<span class=\"hint\">No image selected yet.</span>"
+        }</div>
+      </div>
+    </div>
+    <div class="flow-actions">
+      <button class="btn secondary" data-nav="home">Cancel</button>
+      <button class="btn" id="flueDetectBtn" disabled>Detect sheet &amp; continue</button>
+    </div>
+  `;
+
+  const backButtons = root.querySelectorAll("[data-nav='home']");
+  backButtons.forEach((btn) => btn.addEventListener("click", () => setView("home")));
+
+  const fileInput = root.querySelector("#flueImageInput");
+  const preview = root.querySelector("#flueImagePreview");
+  const detectBtn = root.querySelector("#flueDetectBtn");
+
+  if (job.image && detectBtn) detectBtn.disabled = false;
+
+  if (fileInput) {
+    fileInput.addEventListener("change", (event) => {
+      const target = event.target;
+      const file = target.files && target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        resetJob();
+        job.image = e.target?.result || null;
+        if (job.image && preview) {
+          preview.innerHTML = `<img src="${job.image}" alt="Flue workflow preview">`;
+        }
+        if (detectBtn) detectBtn.disabled = !job.image;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (detectBtn) {
+    detectBtn.addEventListener("click", () => {
+      if (!job.image) return;
+      job.calibration = {
+        pxPerMm: 4.0,
+        source: "mock",
+        sheetCornersPx: {
+          tl: [100, 100],
+          tr: [400, 100],
+          br: [400, 500],
+          bl: [100, 500],
+        },
+        homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      };
+      setView("flueStep2");
+    });
+  }
+}
+
+function renderFlueStep2() {
+  const root = viewRoot();
+  if (!root) return;
+  if (!job.image) {
+    root.innerHTML = `<div class="view-header"><button class="btn secondary" data-nav="flueStep1">&larr; Back</button><h2>Flue positioning &mdash; Step 2</h2><p class="hint">Please upload a photograph first.</p></div>`;
+    const backBtn = root.querySelector("[data-nav='flueStep1']");
+    if (backBtn) backBtn.addEventListener("click", () => setView("flueStep1"));
+    return;
+  }
+
+  if (!selectedFlueId && flueOptions.length) {
+    selectedFlueId = flueOptions[0].flueId;
+  }
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div class="inline-group">
+        <button class="btn secondary" data-nav="flueStep1">&larr; Back</button>
+      </div>
+      <h2>Flue positioning &mdash; Step 2</h2>
+      <p class="hint">Mark the flue terminal and surrounding obstacles.</p>
+    </div>
+    <div class="stack">
+      <div class="control-card">
+        <label for="flueSelect">Flue system</label>
+        <select id="flueSelect"></select>
+      </div>
+      <div class="canvas-wrapper">
+        <canvas id="flueCanvas" class="dashed"></canvas>
+      </div>
+      <div class="palette" id="fluePalette"></div>
+    </div>
+    <div class="flow-actions">
+      <button class="btn secondary" data-nav="flueStep1">Back</button>
+      <button class="btn" id="flueStep2Next" ${job.flue ? "" : "disabled"}>Next: clearances</button>
+    </div>
+  `;
+
+  const select = root.querySelector("#flueSelect");
+  const palette = root.querySelector("#fluePalette");
+  const canvas = root.querySelector("#flueCanvas");
+  const nextBtn = root.querySelector("#flueStep2Next");
+  const backButtons = root.querySelectorAll("[data-nav='flueStep1']");
+  backButtons.forEach((btn) => btn.addEventListener("click", () => setView("flueStep1")));
+
+  if (select) {
+    flueOptions.forEach((option) => {
+      const opt = document.createElement("option");
+      opt.value = option.flueId;
+      opt.textContent = `${option.brand} ${option.systemName} (${option.terminalType})`;
+      if (selectedFlueId === option.flueId) opt.selected = true;
+      select.append(opt);
+    });
+
+    select.addEventListener("change", () => {
+      selectedFlueId = select.value;
+      const selectedOption = flueOptions.find((option) => option.flueId === selectedFlueId);
+      if (job.flue && selectedOption) {
+        job.flue.diameterMm = selectedOption.diameterMm;
+      }
+    });
+  }
+
+  let currentMode = null;
+  if (palette) {
+    const flueButton = document.createElement("button");
+    flueButton.type = "button";
+    flueButton.dataset.mode = "flue";
+    flueButton.innerHTML = `<span class="color-dot" style="background:#e74c3c"></span>Flue terminal`;
+    palette.append(flueButton);
+
+    flueObstacleKinds.forEach((entry) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.mode = entry.kind;
+      button.innerHTML = `<span class="color-dot" style="background:${entry.color}"></span>${entry.label}`;
+      palette.append(button);
+    });
+
+    const updateActive = (activeButton) => {
+      palette.querySelectorAll("button").forEach((btn) => btn.classList.toggle("active", btn === activeButton));
+    };
+
+    palette.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => {
+        currentMode = button.dataset.mode || null;
+        updateActive(button);
+      });
+    });
+  }
+
+  if (canvas) {
+    loadImage(job.image).then((img) => {
+      const drawScene = () => {
+        const info = drawImageToCanvas(canvas, img);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const scale = info.scale;
+        job.flueObstacles.forEach((obstacle) => {
+          const entry = flueObstacleKinds.find((item) => item.kind === obstacle.kind);
+          ctx.fillStyle = entry?.color || "#2c3e50";
+          ctx.beginPath();
+          ctx.arc(obstacle.x * scale, obstacle.y * scale, 6, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        if (job.flue) {
+          ctx.fillStyle = "rgba(231, 76, 60, 0.8)";
+          ctx.beginPath();
+          ctx.arc(job.flue.x * scale, job.flue.y * scale, 8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      };
+      drawScene();
+
+      canvas.addEventListener("click", (event) => {
+        if (!currentMode) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const canvasX = (event.clientX - rect.left) * scaleX;
+        const canvasY = (event.clientY - rect.top) * scaleY;
+        const info = { scale: canvas.width / img.width };
+        const imageX = canvasX / info.scale;
+        const imageY = canvasY / info.scale;
+        if (currentMode === "flue") {
+          const selectedOption = flueOptions.find((option) => option.flueId === selectedFlueId) || fallbackFlueOption;
+          job.flue = {
+            x: imageX,
+            y: imageY,
+            diameterMm: selectedOption.diameterMm,
+          };
+          if (nextBtn) nextBtn.disabled = false;
+        } else {
+          job.flueObstacles.push({ kind: currentMode, x: imageX, y: imageY });
+        }
+        drawScene();
+      });
+    });
+  }
+
+  if (nextBtn) {
+    nextBtn.disabled = !job.flue;
+    nextBtn.addEventListener("click", () => {
+      if (!job.flue) return;
+      setView("flueStep3");
+    });
+  }
+}
+
+function renderFlueStep3() {
+  const root = viewRoot();
+  if (!root) return;
+  if (!job.image || !job.calibration || !job.flue) {
+    root.innerHTML = `<div class="view-header"><button class="btn secondary" data-nav='flueStep2'>&larr; Back</button><h2>Flue positioning &mdash; Step 3</h2><p class="hint">Complete the previous steps to continue.</p></div>`;
+    const backBtn = root.querySelector("[data-nav='flueStep2']");
+    if (backBtn) backBtn.addEventListener("click", () => setView("flueStep2"));
+    return;
+  }
+
+  const selectedOption = flueOptions.find((option) => option.flueId === selectedFlueId) || fallbackFlueOption;
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div class="inline-group">
+        <button class="btn secondary" data-nav="flueStep2">&larr; Back</button>
+      </div>
+      <h2>Flue positioning &mdash; Step 3</h2>
+      <p class="hint">Placeholder red/green zones show where clearance logic will appear.</p>
+    </div>
+    <div class="stack">
+      <div class="canvas-wrapper">
+        <canvas id="flueCanvasStep3" class="dashed"></canvas>
+      </div>
+      <div class="arrow-pad" id="flueArrowPad">
+        <span></span><button data-direction="up">&uarr;</button><span></span>
+        <button data-direction="left">&larr;</button><span></span><button data-direction="right">&rarr;</button>
+        <span></span><button data-direction="down">&darr;</button><span></span>
+      </div>
+      <div class="status-panel" id="flueStatus"></div>
+    </div>
+    <div class="flow-actions">
+      <button class="btn" id="flueSnapshot">Save snapshot</button>
+      <button class="btn secondary" id="flueRestart">Start again</button>
+    </div>
+  `;
+
+  const canvas = root.querySelector("#flueCanvasStep3");
+  const statusPanel = root.querySelector("#flueStatus");
+  const arrowButtons = root.querySelectorAll("#flueArrowPad button[data-direction]");
+  const snapshotBtn = root.querySelector("#flueSnapshot");
+  const restartBtn = root.querySelector("#flueRestart");
+  const backBtn = root.querySelector("[data-nav='flueStep2']");
+  if (backBtn) backBtn.addEventListener("click", () => setView("flueStep2"));
+
+  if (!canvas) return;
+  loadImage(job.image).then((img) => {
+    const drawScene = () => {
+      const info = drawImageToCanvas(canvas, img);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const scale = info.scale;
+      const radiusPx = ((job.flue?.diameterMm || selectedOption.diameterMm || 100) * job.calibration.pxPerMm * scale) / 2;
+      const centerX = job.flue.x * scale;
+      const centerY = job.flue.y * scale;
+
+      ctx.fillStyle = "rgba(39, 174, 96, 0.2)";
       ctx.beginPath();
-      ctx.arc(p.cx, p.cy, p.r, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (p.type === "rect") {
-      ctx.strokeStyle = "rgba(255,255,0,0.5)";
-      const x = Math.min(p.x1, p.x2);
-      const y = Math.min(p.y1, p.y2);
-      const w = Math.abs(p.x2 - p.x1);
-      const h = Math.abs(p.y2 - p.y1);
-      ctx.strokeRect(x, y, w, h);
-    } else if (p.type === "line") {
-      let color = "rgba(0,255,0,0.5)";
-      if (p.kind === "soffit") color = "rgba(0,200,255,0.5)";
-      if (p.kind === "boundary") color = "rgba(255,0,255,0.5)";
-      if (p.kind === "reveal") color = "rgba(255,136,0,0.5)";
-      ctx.strokeStyle = color;
+      ctx.arc(centerX, centerY, radiusPx + 150 * job.calibration.pxPerMm * scale, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(231, 76, 60, 0.35)";
       ctx.beginPath();
-      ctx.moveTo(p.x1, p.y1);
-      ctx.lineTo(p.x2, p.y2);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-  }
+      ctx.moveTo(centerX, centerY);
+      ctx.arc(centerX, centerY, radiusPx + 80 * job.calibration.pxPerMm * scale, -Math.PI / 4, Math.PI / 4);
+      ctx.closePath();
+      ctx.fill();
 
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-}
+      ctx.fillStyle = "rgba(231, 76, 60, 0.85)";
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radiusPx, 0, Math.PI * 2);
+      ctx.fill();
 
-/* Tool handling */
-function setTool(tool) {
-  currentTool = tool;
-  activeStep = null;
-  activePreview = null;
-  statusEl.textContent =
-    `Tool: ${tool}. ${tool === "flue"
-      ? "Tap centre, then tap edge of flue."
-      : tool === "opening"
-        ? "Tap two opposite corners of the opening."
-        : "Tap two points along the feature line."
-    }`;
-  draw();
-}
+      job.flueObstacles.forEach((obstacle) => {
+        const entry = flueObstacleKinds.find((item) => item.kind === obstacle.kind);
+        ctx.fillStyle = entry?.color || "#2c3e50";
+        ctx.beginPath();
+        ctx.arc(obstacle.x * scale, obstacle.y * scale, 6, 0, Math.PI * 2);
+        ctx.fill();
+      });
 
-document.querySelectorAll("[data-tool]").forEach((btn) => {
-  btn.onclick = () => setTool(btn.getAttribute("data-tool"));
-});
+      // TODO: once flues.csv rules and AI segmentation are in place:
+      // - Use job.flue position + calibration to compute distances to each job.flueObstacles.
+      // - Apply rule thresholds from flueOptions selected item.
+      // - Build forbidden (red) and safe (green) polygons and draw instead of mock ring.
 
-togglePanBtn.onclick = () => {
-  panMode = !panMode;
-  togglePanBtn.textContent = `Pan: ${panMode ? "ON" : "OFF"}`;
-  activeStep = null;
-  activePreview = null;
-  draw();
-};
+      if (statusPanel) {
+        statusPanel.innerHTML = `
+          <div><strong>Selected flue:</strong> ${selectedOption.brand} ${selectedOption.systemName} (${selectedOption.terminalType})</div>
+          <div>Diameter: ${selectedOption.diameterMm}mm</div>
+          <div class="badge-green">Ready for clearance CSV integration</div>
+          <div class="hint">Red/green overlays are placeholders; distances will calculate automatically when rules land.</div>
+        `;
+      }
+    };
 
-resetViewBtn.onclick = resetView;
+    drawScene();
 
-clearShapesBtn.onclick = () => {
-  flueCircle = null;
-  openings = [];
-  lines = [];
-  activeStep = null;
-  activePreview = null;
-  draw();
-};
+    arrowButtons.forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (!job.flue) return;
+        const nudgeMm = 10;
+        const nudgePx = nudgeMm * job.calibration.pxPerMm;
+        const direction = button.dataset.direction;
+        if (direction === "up") job.flue.y -= nudgePx;
+        if (direction === "down") job.flue.y += nudgePx;
+        if (direction === "left") job.flue.x -= nudgePx;
+        if (direction === "right") job.flue.x += nudgePx;
+        drawScene();
+      });
+    });
 
-/* Undo last */
-document.getElementById("undo").onclick = () => {
-  if (lines.length) {
-    lines.pop();
-  } else if (openings.length) {
-    openings.pop();
-  } else if (flueCircle) {
-    flueCircle = null;
-  }
-  activeStep = null;
-  activePreview = null;
-  draw();
-};
-
-/* Pointer interactions */
-scene.addEventListener("pointerdown", (e) => {
-  if (!imgLoaded) return;
-  scene.setPointerCapture(e.pointerId);
-  activePointerId = e.pointerId;
-
-  if (panMode) {
-    const r = scene.getBoundingClientRect();
-    lastPanPt = { x: e.clientX, y: e.clientY, cw: r.width, ch: r.height };
-    return;
-  }
-
-  const pt = scenePointFromEvent(e);
-
-  if (currentTool === "flue") {
-    if (!activeStep) {
-      activeStep = { type: "circle", cx: pt.x, cy: pt.y };
-      activePreview = { type: "circle", cx: pt.x, cy: pt.y, r: 10 };
-    } else {
-      const dx = pt.x - activeStep.cx;
-      const dy = pt.y - activeStep.cy;
-      const r = Math.max(5, Math.hypot(dx, dy));
-      flueCircle = { cx: activeStep.cx, cy: activeStep.cy, r };
-      activeStep = null;
-      activePreview = null;
-    }
-  } else if (currentTool === "opening") {
-    if (!activeStep) {
-      activeStep = { type: "rect", x1: pt.x, y1: pt.y };
-      activePreview = { type: "rect", x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
-    } else {
-      openings.push({ x1: activeStep.x1, y1: activeStep.y1, x2: pt.x, y2: pt.y });
-      activeStep = null;
-      activePreview = null;
-    }
-  } else {
-    // line-type tools: downpipe / soffit / boundary / reveal
-    if (!activeStep) {
-      activeStep = { type: "line", x1: pt.x, y1: pt.y, kind: currentTool };
-      activePreview = { type: "line", x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y, kind: currentTool };
-    } else {
-      lines.push({ x1: activeStep.x1, y1: activeStep.y1, x2: pt.x, y2: pt.y, kind: currentTool });
-      activeStep = null;
-      activePreview = null;
-    }
-  }
-
-  draw();
-});
-
-scene.addEventListener("pointermove", (e) => {
-  if (!imgLoaded || activePointerId !== e.pointerId) return;
-
-  if (panMode && lastPanPt) {
-    const r = scene.getBoundingClientRect();
-    const dxPx = e.clientX - lastPanPt.x;
-    const dyPx = e.clientY - lastPanPt.y;
-    const sx = scene.width / lastPanPt.cw;
-    const sy = scene.height / lastPanPt.ch;
-    pan(dxPx * sx, dyPx * sy);
-    lastPanPt = { x: e.clientX, y: e.clientY, cw: r.width, ch: r.height };
-    return;
-  }
-
-  if (!activeStep) return;
-
-  const pt = scenePointFromEvent(e);
-
-  if (activeStep.type === "circle" && activePreview) {
-    const dx = pt.x - activeStep.cx;
-    const dy = pt.y - activeStep.cy;
-    activePreview.r = Math.max(5, Math.hypot(dx, dy));
-  } else if (activeStep.type === "rect" && activePreview) {
-    activePreview.x2 = pt.x;
-    activePreview.y2 = pt.y;
-  } else if (activeStep.type === "line" && activePreview) {
-    activePreview.x2 = pt.x;
-    activePreview.y2 = pt.y;
-  }
-
-  draw();
-});
-
-scene.addEventListener("pointerup", (e) => {
-  if (activePointerId === e.pointerId) {
-    activePointerId = null;
-    lastPanPt = null;
-    try { scene.releasePointerCapture(e.pointerId); } catch {}
-  }
-});
-
-scene.addEventListener("pointercancel", (e) => {
-  if (activePointerId === e.pointerId) {
-    activePointerId = null;
-    lastPanPt = null;
-    activeStep = null;
-    activePreview = null;
-    try { scene.releasePointerCapture(e.pointerId); } catch {}
-    draw();
-  }
-});
-
-/* Arrow + zoom buttons */
-arrows.querySelectorAll("[data-pan]").forEach((btn) => {
-  btn.onclick = () => {
-    if (!imgLoaded) return;
-    const dir = btn.getAttribute("data-pan");
-    const step = 40;
-    if (dir === "left") pan(-step, 0);
-    else if (dir === "right") pan(step, 0);
-    else if (dir === "up") pan(0, -step);
-    else if (dir === "down") pan(0, step);
-  };
-});
-
-zoomBtns.forEach((btn) => {
-  btn.onclick = () => {
-    if (!imgLoaded) return;
-    const mode = btn.getAttribute("data-zoom");
-    const rect = scene.getBoundingClientRect();
-    const cx = rect.width / 2;
-    const cy = rect.height / 2;
-    zoomAt(cx, cy, mode === "in" ? ZOOM_STEP : 1 / ZOOM_STEP);
-  };
-});
-
-/* Image load */
-fileInput.onchange = (e) => {
-  const f = e.target.files?.[0];
-  if (!f) return;
-  const url = URL.createObjectURL(f);
-  img.onload = () => {
-    imgW = img.naturalWidth;
-    imgH = img.naturalHeight;
-    scene.width = imgW;
-    scene.height = imgH;
-    imgLoaded = true;
-    resetView();
-    flueCircle = null;
-    openings = [];
-    lines = [];
-    activeStep = null;
-    activePreview = null;
-    statusEl.textContent =
-      "Image loaded. Choose a tool (Flue circle first), tap to mark, then Generate overlays.";
-    draw();
-    URL.revokeObjectURL(url);
-  };
-  img.onerror = () => {
-    statusEl.textContent = "Failed to load image.";
-    URL.revokeObjectURL(url);
-  };
-  img.src = url;
-};
-
-/* Geometry helpers */
-function boundingRectFromPoints(x1, y1, x2, y2) {
-  const minX = Math.min(x1, x2);
-  const maxX = Math.max(x1, x2);
-  const minY = Math.min(y1, y2);
-  const maxY = Math.max(y1, y2);
-  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-}
-
-/* Overlay generation */
-generateBtn.onclick = () => {
-  if (!imgLoaded) {
-    statusEl.textContent = "Load an image first.";
-    return;
-  }
-  if (!flueCircle) {
-    statusEl.textContent = "Mark the flue circle first (centre then edge).";
-    return;
-  }
-
-  // Calibrate pxPerMm from flue radius (100 mm dia => 50 mm radius)
-  let pxPerMm = flueCircle.r / 50;
-  if (!Number.isFinite(pxPerMm) || pxPerMm <= 0) pxPerMm = 1;
-  if (pxPerMm > 5) pxPerMm = 5;
-
-  const rects = [];
-
-  function addInflatedRect(rect, clearanceMm, kind) {
-    const totalMm = clearanceMm + 50; // clearance edge-edge + flue radius
-    let bufferPx = totalMm * pxPerMm;
-    const maxBuffer = Math.min(imgW, imgH) * 0.45;
-    if (bufferPx > maxBuffer) bufferPx = maxBuffer;
-
-    let x = rect.x - bufferPx;
-    let y = rect.y - bufferPx;
-    let w = rect.w + 2 * bufferPx;
-    let h = rect.h + 2 * bufferPx;
-
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > imgW) w = imgW - x;
-    if (y + h > imgH) h = imgH - y;
-
-    rects.push({ x, y, w, h, kind });
-  }
-
-  openings.forEach((o) => {
-    const r = boundingRectFromPoints(o.x1, o.y1, o.x2, o.y2);
-    addInflatedRect(r, CLEARANCES_MM.opening, "opening");
-  });
-
-  lines.forEach((ln) => {
-    const box = boundingRectFromPoints(ln.x1, ln.y1, ln.x2, ln.y2);
-    const base =
-      ln.kind === "downpipe" ? CLEARANCES_MM.downpipe
-      : ln.kind === "soffit" ? CLEARANCES_MM.soffit
-      : ln.kind === "boundary" ? CLEARANCES_MM.boundary
-      : ln.kind === "reveal" ? CLEARANCES_MM.reveal
-      : 0;
-
-    if (ln.kind === "lintel") {
-      addInflatedRect(box, CLEARANCES_MM.lintel, "lintel");
-    } else {
-      addInflatedRect(box, base, ln.kind);
+    if (snapshotBtn) {
+      snapshotBtn.addEventListener("click", () => {
+        downloadCanvasImage(canvas, "flue-overlay.png");
+      });
     }
   });
 
-  drawOverlays(rects, pxPerMm);
-};
+  if (restartBtn) {
+    restartBtn.addEventListener("click", () => {
+      resetJob();
+      setView("home");
+    });
+  }
+}
 
-/* Draw overlays on export canvases */
-function drawOverlays(rects, pxPerMm) {
-  stdCanvas.width = imgW;
-  stdCanvas.height = imgH;
-  plumeCanvas.width = imgW;
-  plumeCanvas.height = imgH;
-
-  const sCtx = stdCanvas.getContext("2d");
-  const pCtx = plumeCanvas.getContext("2d");
-
-  // Base images
-  sCtx.clearRect(0, 0, imgW, imgH);
-  pCtx.clearRect(0, 0, imgW, imgH);
-
-  sCtx.drawImage(img, 0, 0, imgW, imgH);
-  pCtx.drawImage(img, 0, 0, imgW, imgH);
-
-  // Dim + green wash
-  sCtx.fillStyle = "rgba(0,0,0,0.25)";
-  sCtx.fillRect(0, 0, imgW, imgH);
-
-  pCtx.fillStyle = "rgba(0,255,0,0.15)";
-  pCtx.fillRect(0, 0, imgW, imgH);
-
-  // Red forbidden zones
-  sCtx.fillStyle = "rgba(255,0,0,0.4)";
-  pCtx.fillStyle = "rgba(255,0,0,0.4)";
-  rects.forEach((r) => {
-    sCtx.fillRect(r.x, r.y, r.w, r.h);
-    pCtx.fillRect(r.x, r.y, r.w, r.h);
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    if (!src) {
+      reject(new Error("Missing image source"));
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
   });
-
-  statusEl.textContent =
-    `Generated ${rects.length} clearance zone(s). Scale ≈ ${pxPerMm.toFixed(
-      3
-    )} px/mm from flue circle.`;
-
-  debugEl.textContent = JSON.stringify({ pxPerMm, rects, flueCircle, openings, lines }, null, 2);
-
-  dlStdBtn.disabled = false;
-  dlPlumeBtn.disabled = false;
 }
 
-/* Download helpers */
-function downloadCanvasAsPng(canvas, filename) {
-  const url = canvas.toDataURL("image/png");
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
+function drawImageToCanvas(canvas, image) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { scale: 1 };
+  const maxWidth = Math.min(canvas.parentElement?.clientWidth || image.width, 960);
+  const scale = Math.min(1, maxWidth / image.width);
+  const width = image.width * scale;
+  const height = image.height * scale;
+  canvas.width = width;
+  canvas.height = height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(image, 0, 0, width, height);
+  return { scale };
 }
 
-dlStdBtn.onclick = () => {
-  if (!stdCanvas.width) return;
-  downloadCanvasAsPng(stdCanvas, "flue-standard.png");
-};
+function downloadCanvasImage(canvas, filename) {
+  const link = document.createElement("a");
+  link.href = canvas.toDataURL("image/png");
+  link.download = filename;
+  link.click();
+}
 
-dlPlumeBtn.onclick = () => {
-  if (!plumeCanvas.width) return;
-  downloadCanvasAsPng(plumeCanvas, "flue-plume.png");
-};
+document.addEventListener("DOMContentLoaded", async () => {
+  const tiles = document.getElementById("home-tiles");
+  const yearLabel = document.getElementById("year");
+  if (yearLabel) yearLabel.textContent = String(new Date().getFullYear());
 
-/* Default tool */
-setTool("flue");
+  await loadBoilerModels();
+  await loadFlueOptions();
+  renderHome();
+
+  if (tiles) {
+    tiles.addEventListener("click", (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest(".tile") : null;
+      if (!(target instanceof HTMLElement)) return;
+      const view = target.dataset.view;
+      if (!view) return;
+      if (view === "boilerStep1" || view === "flueStep1") {
+        resetJob();
+      }
+      setView(view);
+    });
+  }
+});
