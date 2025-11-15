@@ -385,10 +385,30 @@ canvas.dashed {
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.18);
 }
 
+.image-preview canvas {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.18);
+}
+
 .hint {
   margin: 0;
   font-size: 0.85rem;
   color: var(--text-muted);
+}
+
+.plumb-tools {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.plumb-tools .hint {
+  font-size: 0.8rem;
+  color: #555;
 }
 
 .view-section {
