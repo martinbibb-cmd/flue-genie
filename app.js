@@ -51,6 +51,13 @@ const job = {
   flueObstacles: [],
 };
 
+// Global physical sheet config (mm between corner marker centres)
+// Defaults assume printer is accurate A4, 210 × 297 mm.
+const sheetConfig = {
+  widthMm: 210,
+  heightMm: 297,
+};
+
 let boilerModels = [];
 let flueOptions = [];
 let boilerPlacement = null; // stored in image pixel space
@@ -362,6 +369,9 @@ function setView(viewName) {
     case "flueStep3":
       renderFlueStep3();
       break;
+    case "settings":
+      renderSettings();
+      break;
     default:
       renderHome();
   }
@@ -371,6 +381,19 @@ function renderHome() {
   const root = viewRoot();
   if (!root) return;
   root.innerHTML = `<div class="view-header"><h2>Ready when the data is</h2><p class="hint">Calibration and clearance logic will drop in once services are wired. For now, explore the mock workflows.</p></div>`;
+
+  const tiles = document.getElementById("home-tiles");
+  if (tiles && !tiles.querySelector("#tileSettings")) {
+    tiles.insertAdjacentHTML(
+      "beforeend",
+      `
+        <button class="tile" data-view="settings" id="tileSettings">
+          <h3>Settings</h3>
+          <p>Sheet calibration &amp; app options</p>
+        </button>
+      `,
+    );
+  }
 }
 
 function renderPrintSheet() {
@@ -471,7 +494,7 @@ function renderBoilerStep1() {
     detectBtn.addEventListener("click", () => {
       if (!job.image) return;
       job.calibration = {
-        pxPerMm: 4.0,
+        pxPerMm: 4.0, // TEMP: will be recomputed just below
         source: "mock",
         sheetCornersPx: {
           tl: [100, 100],
@@ -480,7 +503,24 @@ function renderBoilerStep1() {
           bl: [100, 500],
         },
         homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        sheetWidthMm: sheetConfig.widthMm,
+        sheetHeightMm: sheetConfig.heightMm,
       };
+
+      (function recalcMockScale() {
+        const c = job.calibration;
+        const { tl, tr, bl } = c.sheetCornersPx;
+        const dxW = tr[0] - tl[0];
+        const dyW = tr[1] - tl[1];
+        const dxH = bl[0] - tl[0];
+        const dyH = bl[1] - tl[1];
+        const distPxWidth = Math.hypot(dxW, dyW);
+        const distPxHeight = Math.hypot(dxH, dyH);
+
+        const pxPerMmW = distPxWidth / c.sheetWidthMm;
+        const pxPerMmH = distPxHeight / c.sheetHeightMm;
+        c.pxPerMm = (pxPerMmW + pxPerMmH) / 2;
+      })();
       // TODO: replace with real QR detection / calibration later.
       setView("boilerStep2");
     });
@@ -882,7 +922,7 @@ function renderFlueStep1() {
     detectBtn.addEventListener("click", () => {
       if (!job.image) return;
       job.calibration = {
-        pxPerMm: 4.0,
+        pxPerMm: 4.0, // TEMP: will be recomputed just below
         source: "mock",
         sheetCornersPx: {
           tl: [100, 100],
@@ -891,8 +931,119 @@ function renderFlueStep1() {
           bl: [100, 500],
         },
         homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        sheetWidthMm: sheetConfig.widthMm,
+        sheetHeightMm: sheetConfig.heightMm,
       };
+      (function recalcMockScale() {
+        const c = job.calibration;
+        const { tl, tr, bl } = c.sheetCornersPx;
+        const dxW = tr[0] - tl[0];
+        const dyW = tr[1] - tl[1];
+        const dxH = bl[0] - tl[0];
+        const dyH = bl[1] - tl[1];
+        const distPxWidth = Math.hypot(dxW, dyW);
+        const distPxHeight = Math.hypot(dxH, dyH);
+
+        const pxPerMmW = distPxWidth / c.sheetWidthMm;
+        const pxPerMmH = distPxHeight / c.sheetHeightMm;
+        c.pxPerMm = (pxPerMmW + pxPerMmH) / 2;
+      })();
       setView("flueStep2");
+    });
+  }
+}
+
+function renderSettings() {
+  const root = document.getElementById("view-root");
+  if (!root) return;
+  root.innerHTML = `
+    <div class="settings-view">
+      <h2>Settings</h2>
+
+      <section class="settings-section">
+        <h3>Positioning sheet scale</h3>
+        <p class="hint">
+          If Safari or the printer has scaled the A4 positioning sheet, measure the
+          distance on the printed paper between the <strong>centre</strong> of the TL and TR
+          markers, and between TL and BL. Enter those values here once and the app
+          will use them for all jobs.
+        </p>
+        <div class="settings-field-row">
+          <label>
+            TL ↔ TR (width, mm)
+            <input type="number" id="sheetWidthMmInput" min="100" max="400" step="1">
+          </label>
+          <label>
+            TL ↔ BL (height, mm)
+            <input type="number" id="sheetHeightMmInput" min="100" max="500" step="1">
+          </label>
+        </div>
+        <p id="sheetScaleInfo" class="hint"></p>
+      </section>
+
+      <button type="button" id="settingsBackBtn">Back</button>
+    </div>
+  `;
+
+  const widthInput = document.getElementById("sheetWidthMmInput");
+  const heightInput = document.getElementById("sheetHeightMmInput");
+  const info = document.getElementById("sheetScaleInfo");
+
+  if (!widthInput || !heightInput) return;
+
+  // Initialise from global sheetConfig
+  widthInput.value = String(sheetConfig.widthMm);
+  heightInput.value = String(sheetConfig.heightMm);
+
+  const updateSheetConfig = () => {
+    const wMm = Number(widthInput.value) || 210;
+    const hMm = Number(heightInput.value) || 297;
+
+    sheetConfig.widthMm = wMm;
+    sheetConfig.heightMm = hMm;
+
+    // If a calibration exists with corner positions, recompute pxPerMm
+    if (job.calibration && job.calibration.sheetCornersPx) {
+      const { tl, tr, bl } = job.calibration.sheetCornersPx;
+      if (tl && tr && bl) {
+        const dxW = tr[0] - tl[0];
+        const dyW = tr[1] - tl[1];
+        const dxH = bl[0] - tl[0];
+        const dyH = bl[1] - tl[1];
+        const distPxWidth = Math.hypot(dxW, dyW);
+        const distPxHeight = Math.hypot(dxH, dyH);
+
+        const pxPerMmW = distPxWidth / wMm;
+        const pxPerMmH = distPxHeight / hMm;
+        const pxPerMm = (pxPerMmW + pxPerMmH) / 2;
+
+        job.calibration.pxPerMm = pxPerMm;
+        job.calibration.sheetWidthMm = wMm;
+        job.calibration.sheetHeightMm = hMm;
+        job.calibration.source = "calibrationSheet";
+
+        if (info) {
+          info.textContent = `Current scale: ${pxPerMm.toFixed(3)} px/mm (sheet ${wMm} × ${hMm} mm).`;
+        }
+        return;
+      }
+    }
+
+    if (info) {
+      info.textContent = `Sheet dimensions set to ${wMm} × ${hMm} mm. Calibration will use these once a sheet is detected.`;
+    }
+  };
+
+  widthInput.addEventListener("input", updateSheetConfig);
+  heightInput.addEventListener("input", updateSheetConfig);
+
+  // Run once to show initial message
+  updateSheetConfig();
+
+  const backBtn = document.getElementById("settingsBackBtn");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      setView("home");
     });
   }
 }
