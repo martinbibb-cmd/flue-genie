@@ -71,17 +71,6 @@ const flueObstacleKinds = [
   { kind: "soffit", label: "Soffit/eaves", color: "#9b59b6" },
 ];
 
-const fallbackBoilerModel = {
-  modelId: "std_400x700x300",
-  brand: "Generic",
-  modelName: "Standard 400×700×300",
-  widthMm: 400,
-  heightMm: 700,
-  depthMm: 300,
-  install: { top: 10, bottom: 10, left: 5, right: 5, front: 5 },
-  service: { top: 200, front: 600 },
-};
-
 const fallbackFlueOption = {
   flueId: "dummy",
   brand: "Generic",
@@ -98,19 +87,6 @@ const fallbackFlueOption = {
     minFromBoundaryMm: 300,
   },
 };
-
-const boilerNumericFields = [
-  "widthMm",
-  "heightMm",
-  "depthMm",
-  "installTopMm",
-  "installBottomMm",
-  "installLeftMm",
-  "installRightMm",
-  "installFrontMm",
-  "serviceTopMm",
-  "serviceFrontMm",
-];
 
 const flueNumericFields = [
   "diameterMm",
@@ -154,40 +130,167 @@ function parseCSV(text) {
 
 async function loadBoilerModels() {
   try {
-    const res = await fetch("/data/boilers.csv", { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch("data/boilers.csv", { cache: "no-store" });
+    if (!res.ok) throw new Error("Boilers CSV not found");
     const text = await res.text();
-    const { headers, rows } = parseCSV(text);
-    if (!rows.length || headers.length === 0) throw new Error("Empty CSV");
-    boilerModels = rows.map((values) => {
-      const record = Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
-      boilerNumericFields.forEach((field) => {
-        record[field] = toNumber(record[field]);
-      });
-      return {
-        modelId: record.modelId,
-        brand: record.brand,
-        modelName: record.modelName,
-        widthMm: record.widthMm,
-        heightMm: record.heightMm,
-        depthMm: record.depthMm,
-        install: {
-          top: record.installTopMm,
-          bottom: record.installBottomMm,
-          left: record.installLeftMm,
-          right: record.installRightMm,
-          front: record.installFrontMm,
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+    if (lines.length < 2) throw new Error("Boilers CSV empty");
+
+    const parseCsvLine = (line) => {
+      const result = [];
+      let current = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === "," && !inQuotes) {
+          result.push(current.trim());
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    };
+
+    const header = parseCsvLine(lines[0]);
+    const idx = (name) => header.indexOf(name);
+
+    const idIdx = idx("boiler_id");
+    const brandIdx = idx("brand");
+    const modelIdx = idx("model");
+    const variantIdx = idx("variant");
+    const typeIdx = idx("type");
+    const widthIdx = idx("width_mm");
+    const heightIdx = idx("height_mm");
+    const depthIdx = idx("depth_mm");
+    const aboveIdx = idx("above_mm");
+    const belowIdx = idx("below_mm");
+    const leftIdx = idx("left_mm");
+    const rightIdx = idx("right_mm");
+    const frontMinIdx = idx("front_min_mm");
+    const frontPrefIdx = idx("front_preferred_mm");
+    const sideServIdx = idx("service_side_mm");
+
+    const requiredIndices = [
+      idIdx,
+      brandIdx,
+      modelIdx,
+      typeIdx,
+      widthIdx,
+      heightIdx,
+      depthIdx,
+      aboveIdx,
+      leftIdx,
+      rightIdx,
+      frontMinIdx,
+      frontPrefIdx,
+    ];
+    if (requiredIndices.some((value) => value === -1)) {
+      throw new Error("Boilers CSV missing required columns");
+    }
+
+    const numberOrNull = (v) => {
+      if (typeof v !== "string") return null;
+      const trimmed = v.trim();
+      if (!trimmed) return null;
+      const n = Number(trimmed);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    boilerModels = lines
+      .slice(1)
+      .map((line) => {
+        const cols = parseCsvLine(line);
+        const widthMm = numberOrNull(cols[widthIdx]);
+        const heightMm = numberOrNull(cols[heightIdx]);
+        const depthMm = numberOrNull(cols[depthIdx]);
+        const aboveMm = numberOrNull(cols[aboveIdx]);
+        const belowMm = numberOrNull(cols[belowIdx]);
+        const leftMm = numberOrNull(cols[leftIdx]);
+        const rightMm = numberOrNull(cols[rightIdx]);
+        const frontMinMm = numberOrNull(cols[frontMinIdx]);
+        const frontPreferredMm = numberOrNull(cols[frontPrefIdx]);
+        const serviceSideMm = numberOrNull(cols[sideServIdx]);
+
+        const brand = (cols[brandIdx] || "").trim();
+        const model = (cols[modelIdx] || "").trim();
+        const variant = (cols[variantIdx] || "").trim();
+        const type = (cols[typeIdx] || "").trim();
+
+        const displayName = [
+          brand,
+          model,
+          variant ? `(${variant})` : "",
+          type ? `[${type}]` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+
+        return {
+          id: (cols[idIdx] || "").trim(),
+          brand,
+          model,
+          variant,
+          type,
+          displayName,
+          widthMm,
+          heightMm,
+          depthMm,
+          clearances: {
+            install: {
+              top: aboveMm,
+              bottom: belowMm,
+              left: leftMm,
+              right: rightMm,
+              frontMin: frontMinMm,
+              frontPreferred: frontPreferredMm,
+            },
+            service: {
+              side: serviceSideMm,
+            },
+          },
+        };
+      })
+      .filter((b) => b.id);
+
+    if (!boilerModels.length) throw new Error("No valid boiler rows");
+  } catch (err) {
+    console.error("Failed to load boilers.csv, using fallback model:", err);
+
+    boilerModels = [
+      {
+        id: "std_400x700x300",
+        brand: "Generic",
+        model: "Standard",
+        variant: "Fallback",
+        type: "combi",
+        displayName: "Generic Standard 400×700×300 [combi]",
+        widthMm: 400,
+        heightMm: 700,
+        depthMm: 300,
+        clearances: {
+          install: {
+            top: 200,
+            bottom: 150,
+            left: 5,
+            right: 5,
+            frontMin: 450,
+            frontPreferred: 600,
+          },
+          service: {
+            side: 300,
+          },
         },
-        service: {
-          top: record.serviceTopMm,
-          front: record.serviceFrontMm,
-        },
-      };
-    }).filter((entry) => entry.modelId && entry.brand && entry.modelName);
-    if (!boilerModels.length) throw new Error("No valid boiler models");
-  } catch (error) {
-    console.warn("Failed to load boilers.csv", error);
-    boilerModels = [fallbackBoilerModel];
+      },
+    ];
   }
 }
 
@@ -369,15 +472,18 @@ function renderBoilerStep1() {
 
 function buildBoilerChoice(model, sheetDepth) {
   return {
-    modelId: model.modelId,
+    modelId: model.id,
     brand: model.brand,
-    modelName: model.modelName,
-    widthMm: model.widthMm,
-    heightMm: model.heightMm,
-    depthMm: model.depthMm,
-    install: { ...model.install },
-    service: { ...model.service },
-    sheetDepthFromWallMm: sheetDepth,
+    model: model.model,
+    variant: model.variant,
+    type: model.type,
+    displayName: model.displayName,
+    widthMm: model.widthMm ?? 0,
+    heightMm: model.heightMm ?? 0,
+    depthMm: model.depthMm ?? 0,
+    install: { ...model.clearances.install },
+    service: { ...model.clearances.service },
+    sheetDepthFromWallMm: sheetDepth ?? 0,
   };
 }
 
@@ -399,92 +505,122 @@ function renderBoilerStep2() {
   root.innerHTML = `
     <div class="view-header">
       <div class="inline-group">
-        <button class="btn secondary" data-nav="boilerStep1">&larr; Back</button>
+        <button class="btn secondary" id="boilerStep2BackHeader">&larr; Back</button>
       </div>
       <h2>Boiler positioning &mdash; Step 2</h2>
       <p class="hint">Pick the boiler model and mark nearby cupboards, worktops, or ceilings.</p>
     </div>
-    <div class="controls-grid split">
-      <div class="control-card">
-        <div class="stack">
-          <label for="boilerModelSelect">Boiler model</label>
-          <select id="boilerModelSelect"></select>
+    <div class="boiler-step">
+      <div class="controls-grid split">
+        <div class="control-card boiler-config">
           <div class="stack">
-            <label for="sheetDepthInput">Sheet depth from wall (mm)</label>
-            <input type="number" id="sheetDepthInput" min="0" step="1" value="${job.boiler?.sheetDepthFromWallMm ?? 0}">
-            <div class="inline-group" id="sheetDepthPresets">
-              <button class="btn secondary" data-depth="0">On wall (0mm)</button>
-              <button class="btn secondary" data-depth="auto">On boiler front (auto)</button>
-              <button class="btn secondary" data-depth="600">On cupboard (600mm)</button>
+            <label for="boilerModelSelect">Boiler model</label>
+            <select id="boilerModelSelect"></select>
+
+            <div class="depth-controls">
+              <p>Depth from wall to positioning sheet (mm)</p>
+              <div class="buttons">
+                <button type="button" id="depthOnWall">On wall (0)</button>
+                <button type="button" id="depthOnBoilerFront">On boiler front (auto)</button>
+                <button type="button" id="depthOnCupboard">On cupboard (600)</button>
+              </div>
+              <input type="number" id="sheetDepthInput" min="0" step="10">
             </div>
           </div>
         </div>
-      </div>
-      <div class="stack">
-        <div class="canvas-wrapper">
-          <canvas id="boilerCanvas" class="dashed"></canvas>
+        <div class="stack boiler-canvas-wrap">
+          <div class="canvas-wrapper">
+            <canvas id="boilerCanvas" class="dashed"></canvas>
+          </div>
+          <div class="palette boiler-obstacles-palette" id="boilerPalette"></div>
         </div>
-        <div class="palette" id="boilerObstaclePalette"></div>
       </div>
-    </div>
-    <div class="flow-actions">
-      <button class="btn secondary" data-nav="boilerStep1">Back</button>
-      <button class="btn" id="boilerStep2Next" ${job.boiler ? "" : "disabled"}>Next: placement</button>
+      <div class="flow-actions boiler-nav">
+        <button class="btn secondary" type="button" id="boilerBackBtn">Back</button>
+        <button class="btn" type="button" id="boilerNextBtn">Next: Place boiler</button>
+      </div>
     </div>
   `;
 
-  const modelSelect = root.querySelector("#boilerModelSelect");
-  const sheetDepthInput = root.querySelector("#sheetDepthInput");
-  const sheetDepthButtons = root.querySelectorAll("#sheetDepthPresets button");
-  const palette = root.querySelector("#boilerObstaclePalette");
-  const canvas = root.querySelector("#boilerCanvas");
-  const nextBtn = root.querySelector("#boilerStep2Next");
-  const backButtons = root.querySelectorAll("[data-nav='boilerStep1']");
-  backButtons.forEach((btn) => btn.addEventListener("click", () => setView("boilerStep1")));
+  const select = document.getElementById("boilerModelSelect");
+  const depthInput = document.getElementById("sheetDepthInput");
+  const depthOnWallBtn = document.getElementById("depthOnWall");
+  const depthOnBoilerFrontBtn = document.getElementById("depthOnBoilerFront");
+  const depthOnCupboardBtn = document.getElementById("depthOnCupboard");
+  const palette = document.getElementById("boilerPalette");
+  const canvas = document.getElementById("boilerCanvas");
+  const headerBackBtn = document.getElementById("boilerStep2BackHeader");
+  const backBtn = document.getElementById("boilerBackBtn");
+  const nextBtn = document.getElementById("boilerNextBtn");
 
-  if (modelSelect) {
-    boilerModels.forEach((model) => {
-      const option = document.createElement("option");
-      option.value = model.modelId;
-      option.textContent = `${model.brand} ${model.modelName}`;
-      if (job.boiler && job.boiler.modelId === model.modelId) {
-        option.selected = true;
-      }
-      modelSelect.append(option);
-    });
+  const goBack = () => setView("boilerStep1");
 
-    modelSelect.addEventListener("change", () => {
-      const selected = boilerModels.find((model) => model.modelId === modelSelect.value);
-      if (!selected) return;
-      const depth = job.boiler?.sheetDepthFromWallMm ?? 0;
-      job.boiler = buildBoilerChoice(selected, depth);
-      if (sheetDepthInput) sheetDepthInput.value = String(job.boiler.sheetDepthFromWallMm);
+  if (headerBackBtn) {
+    headerBackBtn.addEventListener("click", goBack);
+  }
+
+  if (backBtn) {
+    backBtn.addEventListener("click", goBack);
+  }
+
+  if (nextBtn) {
+    nextBtn.disabled = !job.boiler;
+    nextBtn.addEventListener("click", () => {
+      if (!job.boiler) return;
+      setView("boilerStep3");
     });
   }
 
-  if (sheetDepthInput) {
-    sheetDepthInput.addEventListener("change", () => {
-      if (!job.boiler) return;
-      const value = toNumber(sheetDepthInput.value);
-      job.boiler.sheetDepthFromWallMm = value;
+  if (select) {
+    boilerModels.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.displayName;
+      if (job.boiler?.modelId === m.id) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+
+    select.addEventListener("change", () => {
+      const selId = select.value;
+      const m = boilerModels.find((b) => b.id === selId);
+      if (!m) return;
+      const sheetDepth = job.boiler?.sheetDepthFromWallMm ?? 0;
+      job.boiler = buildBoilerChoice(m, sheetDepth);
+      if (depthInput) depthInput.value = String(job.boiler.sheetDepthFromWallMm);
+      if (nextBtn) nextBtn.disabled = !job.boiler;
     });
   }
 
-  sheetDepthButtons.forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      if (!job.boiler) return;
-      const depthValue = button.dataset.depth;
-      let newDepth = 0;
-      if (depthValue === "auto") {
-        newDepth = job.boiler.depthMm;
-      } else {
-        newDepth = toNumber(depthValue);
-      }
-      job.boiler.sheetDepthFromWallMm = newDepth;
-      if (sheetDepthInput) sheetDepthInput.value = String(newDepth);
+  const updateDepth = (mm) => {
+    if (!job.boiler) return;
+    job.boiler.sheetDepthFromWallMm = mm;
+    if (depthInput) depthInput.value = String(mm);
+  };
+
+  if (depthInput) {
+    depthInput.value = String(job.boiler?.sheetDepthFromWallMm ?? 0);
+    depthInput.addEventListener("input", () => {
+      const mm = Number(depthInput.value) || 0;
+      updateDepth(mm);
     });
-  });
+  }
+
+  if (depthOnWallBtn) {
+    depthOnWallBtn.addEventListener("click", () => updateDepth(0));
+  }
+
+  if (depthOnBoilerFrontBtn) {
+    depthOnBoilerFrontBtn.addEventListener("click", () => {
+      const model = boilerModels.find((b) => b.id === job.boiler?.modelId);
+      updateDepth(model?.depthMm ?? 300);
+    });
+  }
+
+  if (depthOnCupboardBtn) {
+    depthOnCupboardBtn.addEventListener("click", () => updateDepth(600));
+  }
 
   let currentKind = null;
   if (palette) {
@@ -499,7 +635,7 @@ function renderBoilerStep2() {
         currentKind = entry.kind;
         palette.querySelectorAll("button").forEach((btn) => btn.classList.toggle("active", btn === button));
       });
-      palette.append(button);
+      palette.appendChild(button);
     });
   }
 
@@ -531,13 +667,6 @@ function renderBoilerStep2() {
     });
   }
 
-  if (nextBtn) {
-    nextBtn.disabled = !job.boiler;
-    nextBtn.addEventListener("click", () => {
-      if (!job.boiler) return;
-      setView("boilerStep3");
-    });
-  }
 }
 
 function renderBoilerStep3() {
@@ -631,8 +760,11 @@ function renderBoilerStep3() {
       // - Change aura colour to green/amber/red accordingly.
 
       if (statusPanel) {
+        const label = job.boiler.displayName || [job.boiler.brand, job.boiler.model, job.boiler.variant]
+          .filter(Boolean)
+          .join(" ");
         statusPanel.innerHTML = `
-          <div><strong>Boiler:</strong> ${job.boiler.brand} ${job.boiler.modelName}</div>
+          <div><strong>Boiler:</strong> ${label}</div>
           <div>Size: ${job.boiler.widthMm}mm × ${job.boiler.heightMm}mm × ${job.boiler.depthMm}mm</div>
           <div>Sheet depth reference: ${job.boiler.sheetDepthFromWallMm}mm</div>
           <div class="badge-amber">Clearance checks pending CSV rules</div>
