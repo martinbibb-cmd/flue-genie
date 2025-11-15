@@ -377,18 +377,35 @@ function renderPrintSheet() {
   const root = viewRoot();
   if (!root) return;
   root.innerHTML = `
-    <div class="view-header">
-      <button class="btn secondary" data-nav="home">&larr; Back</button>
+    <div class="print-sheet-view">
       <h2>Print positioning sheet</h2>
-      <p class="hint">Use this A4 sheet to provide scale and orientation in your site photos. QR detection is mocked today but ready for AI calibration.</p>
-    </div>
-    <div class="stack">
-      <p>Print one copy per job site and keep it visible in every photograph. Future releases will auto-detect the QR matrix to scale measurements.</p>
-      <a href="assets/positioning-sheet-a4.pdf" download class="btn">Download A4 sheet (PDF)</a>
+      <p>
+        This A4 sheet is used to calibrate scale and orientation for boiler and flue positioning.
+        Print it at <strong>100% scale</strong> (no "fit to page") and check that the short edge
+        measures 210&nbsp;mm and the long edge 297&nbsp;mm.
+      </p>
+      <p>
+        Tape the sheet flat to the wall, cupboard, or boiler front in the approximate position
+        where the boiler or flue will go. Keep it reasonably level.
+      </p>
+      <p>
+        <a href="assets/positioning-sheet-a4.svg" target="_blank" class="btn">
+          Open A4 positioning sheet
+        </a>
+      </p>
+      <p class="hint">
+        Tip: When the sheet opens in your browser, use the print dialog and ensure
+        the scale is set to 100% (or "Actual size").
+      </p>
+      <button type="button" class="btn secondary" id="backHomeBtn">Back to home</button>
     </div>
   `;
-  const backBtn = root.querySelector("[data-nav='home']");
-  if (backBtn) backBtn.addEventListener("click", () => setView("home"));
+  const backBtn = document.getElementById("backHomeBtn");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      setView("home");
+    });
+  }
 }
 
 function renderBoilerStep1() {
