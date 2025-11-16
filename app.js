@@ -1062,17 +1062,26 @@ function renderFlueStep1() {
         <button class="btn secondary" data-nav="home">&larr; Home</button>
       </div>
       <h2>Flue positioning &mdash; Step 1</h2>
-      <p class="hint">Upload an exterior photo with the positioning sheet. Calibration will be mocked until AI detection lands.</p>
+      <p class="hint">Upload an exterior photo that clearly shows the calibration card and flue area.</p>
     </div>
     <div class="controls-grid">
       <div class="control-card">
         <label for="flueImageInput">Site photograph</label>
         <input type="file" id="flueImageInput" accept="image/*">
-        <p class="hint">Flue clearance checks will read CSV rules once populated.</p>
+        <p class="hint">Use the same photo for calibration and overlays.</p>
+        <div class="calibration-controls">
+          <button type="button" class="btn" id="btnCalibrate" disabled>Calibrate with card</button>
+          <span id="calStatus" class="status">Not calibrated</span>
+        </div>
       </div>
       <div class="control-card">
         <h3>Preview</h3>
-        <div class="image-preview" id="flueImagePreview"></div>
+        <div class="image-preview" id="flueImagePreview">
+          <div id="canvasContainer">
+            <canvas id="photoCanvas"></canvas>
+            <canvas id="overlayCanvas"></canvas>
+          </div>
+        </div>
       </div>
     </div>
     <div class="plumb-tools">
@@ -1085,7 +1094,24 @@ function renderFlueStep1() {
     </div>
     <div class="flow-actions">
       <button class="btn secondary" data-nav="home">Cancel</button>
-      <button class="btn" id="flueDetectBtn" disabled>Detect sheet &amp; continue</button>
+      <button class="btn" id="flueDetectBtn" disabled>Next: mark flue</button>
+    </div>
+    <div id="calModal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Card calibration</h2>
+        <p>
+          Make sure the card is clearly visible, flat against the wall or boiler, in the same plane as the flue.
+        </p>
+        <div class="modal-buttons">
+          <button type="button" id="btnAutoDetect">Auto-detect card</button>
+          <button type="button" id="btnManualCorners">Tap corners manually</button>
+        </div>
+        <button type="button" id="btnCloseModal" class="secondary">Cancel</button>
+      </div>
+    </div>
+    <div id="tapHint" class="tap-hint hidden">
+      Tap the card corners in order: top-left, top-right, bottom-right, bottom-left.
+      <button type="button" id="btnCancelTap" class="secondary small">Cancel</button>
     </div>
   `;
 
@@ -1093,15 +1119,32 @@ function renderFlueStep1() {
   backButtons.forEach((btn) => btn.addEventListener("click", () => setView("home")));
 
   const fileInput = root.querySelector("#flueImageInput");
-  const preview = root.querySelector("#flueImagePreview");
   const detectBtn = root.querySelector("#flueDetectBtn");
   const markPlumbBtn = root.querySelector("#flueMarkPlumbBtn");
   const plumbStatus = root.querySelector("#fluePlumbStatus");
+  const btnCalibrate = root.querySelector("#btnCalibrate");
+  const calStatus = root.querySelector("#calStatus");
+  const photoCanvas = root.querySelector("#photoCanvas");
+  const overlayCanvas = root.querySelector("#overlayCanvas");
+  const photoCtx = photoCanvas ? photoCanvas.getContext("2d") : null;
+  const overlayCtx = overlayCanvas ? overlayCanvas.getContext("2d") : null;
+  const calModal = root.querySelector("#calModal");
+  const btnAutoDetect = root.querySelector("#btnAutoDetect");
+  const btnManualCorners = root.querySelector("#btnManualCorners");
+  const btnCloseModal = root.querySelector("#btnCloseModal");
+  const tapHint = root.querySelector("#tapHint");
+  const btnCancelTap = root.querySelector("#btnCancelTap");
 
-  let fluePreviewCanvas = null;
   let previewImage = null;
   let plumbMarkMode = false;
   let plumbClickStage = 0;
+  let tapSession = null;
+
+  const updateCalStatus = (text, ok = false) => {
+    if (!calStatus) return;
+    calStatus.textContent = text;
+    calStatus.style.color = ok ? "#6ee7b7" : "#f97373";
+  };
 
   const updatePlumbStatus = (message) => {
     if (plumbStatus) plumbStatus.textContent = message;
@@ -1112,10 +1155,10 @@ function renderFlueStep1() {
     const top = job.calibration?.plumbTopPx;
     const bottom = job.calibration?.plumbBottomPx;
     if (top && bottom) {
-      const pxPerMm = Number.isFinite(job.calibration.pxPerMm)
+      const pxPerMm = Number.isFinite(job.calibration?.pxPerMm)
         ? job.calibration.pxPerMm.toFixed(3)
         : "?";
-      const length = job.calibration.plumbLengthMm ?? plumbConfig.lengthMm;
+      const length = job.calibration?.plumbLengthMm ?? plumbConfig.lengthMm;
       const message = `Plumb line marked (${length} mm → ${pxPerMm} px/mm).`;
       plumbStatus.textContent = plumbConfig.enabled ? message : `${message} (disabled in Settings)`;
     } else {
@@ -1123,42 +1166,7 @@ function renderFlueStep1() {
     }
   };
 
-  const renderPreviewImage = () => {
-    if (!fluePreviewCanvas || !previewImage) return;
-    drawImageToCanvas(fluePreviewCanvas, previewImage);
-    const ctx = fluePreviewCanvas.getContext("2d");
-    if (!ctx) return;
-    const top = job.calibration?.plumbTopPx;
-    const bottom = job.calibration?.plumbBottomPx;
-    if (!top && !bottom) return;
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(220, 38, 38, 0.85)";
-    ctx.fillStyle = "rgba(220, 38, 38, 0.9)";
-    ctx.lineWidth = 2;
-    if (top && bottom) {
-      ctx.beginPath();
-      ctx.moveTo(top[0], top[1]);
-      ctx.lineTo(bottom[0], bottom[1]);
-      ctx.stroke();
-    }
-    const drawPoint = (point) => {
-      if (!point) return;
-      ctx.beginPath();
-      ctx.arc(point[0], point[1], 4, 0, Math.PI * 2);
-      ctx.fill();
-    };
-    drawPoint(top);
-    drawPoint(bottom);
-    ctx.restore();
-  };
-
-  const handleCanvasClick = (event) => {
-    if (!plumbMarkMode || !fluePreviewCanvas) return;
-    const rect = fluePreviewCanvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
+  const ensureCalibrationShell = () => {
     if (!job.calibration) {
       job.calibration = {
         pxPerMm: 4.0,
@@ -1174,64 +1182,145 @@ function renderFlueStep1() {
         sheetHeightMm: sheetConfig.heightMm,
       };
     }
+    return job.calibration;
+  };
 
-    if (plumbClickStage === 1) {
-      job.calibration.plumbTopPx = [x, y];
-      delete job.calibration.plumbBottomPx;
-      job.calibration.plumbLengthMm = plumbConfig.lengthMm;
-      plumbClickStage = 2;
-      updatePlumbStatus("Now tap the BOTTOM of the plumb line...");
-      renderPreviewImage();
-      return;
-    }
+  const resetCardState = () => {
+    if (typeof IDCalib === "undefined") return;
+    const state = IDCalib.getCalibState();
+    state.scalePxPerMm = null;
+    state.cardCorners = null;
+  };
 
-    if (plumbClickStage === 2) {
-      job.calibration.plumbBottomPx = [x, y];
-      job.calibration.plumbLengthMm = plumbConfig.lengthMm;
-      plumbMarkMode = false;
-      plumbClickStage = 0;
-      recalcScaleFromPlumb();
-      renderPreviewImage();
-      syncPlumbStatus();
-      return;
+  const resizeCanvasesToImage = (img) => {
+    if (!photoCanvas || !overlayCanvas) return;
+    const width = img.naturalWidth || img.width;
+    const height = img.naturalHeight || img.height;
+    photoCanvas.width = width;
+    photoCanvas.height = height;
+    overlayCanvas.width = width;
+    overlayCanvas.height = height;
+  };
+
+  const clearOverlay = () => {
+    if (!overlayCtx || !overlayCanvas) return;
+    if (typeof IDOverlay !== "undefined" && IDOverlay.clearOverlay) {
+      IDOverlay.clearOverlay(overlayCtx, overlayCanvas);
+    } else {
+      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
     }
+  };
+
+  const drawPlumbOverlay = () => {
+    if (!overlayCtx) return;
+    const top = job.calibration?.plumbTopPx;
+    const bottom = job.calibration?.plumbBottomPx;
+    if (!top && !bottom) return;
+    overlayCtx.save();
+    overlayCtx.strokeStyle = "rgba(220, 38, 38, 0.85)";
+    overlayCtx.fillStyle = "rgba(220, 38, 38, 0.9)";
+    overlayCtx.lineWidth = 2;
+    if (top && bottom) {
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(top[0], top[1]);
+      overlayCtx.lineTo(bottom[0], bottom[1]);
+      overlayCtx.stroke();
+    }
+    const drawPoint = (point) => {
+      if (!point) return;
+      overlayCtx.beginPath();
+      overlayCtx.arc(point[0], point[1], 4, 0, Math.PI * 2);
+      overlayCtx.fill();
+    };
+    drawPoint(top);
+    drawPoint(bottom);
+    overlayCtx.restore();
+  };
+
+  const refreshOverlayVisuals = () => {
+    if (!overlayCtx || !overlayCanvas) return;
+    clearOverlay();
+    if (typeof IDCalib !== "undefined") {
+      const state = IDCalib.getCalibState();
+      if (state?.cardCorners && IDOverlay?.drawCardOutline) {
+        IDOverlay.drawCardOutline(overlayCtx, state.cardCorners);
+      }
+    }
+    drawPlumbOverlay();
+  };
+
+  const drawPhoto = () => {
+    if (!photoCtx || !photoCanvas || !previewImage) return;
+    resizeCanvasesToImage(previewImage);
+    photoCtx.clearRect(0, 0, photoCanvas.width, photoCanvas.height);
+    photoCtx.drawImage(previewImage, 0, 0, photoCanvas.width, photoCanvas.height);
+    refreshOverlayVisuals();
   };
 
   const refreshPreview = () => {
-    if (!preview) return;
+    if (!photoCanvas || !overlayCanvas) return;
     if (!job.image) {
-      preview.innerHTML = '<span class="hint">No image selected yet.</span>';
-      fluePreviewCanvas = null;
       previewImage = null;
-      plumbMarkMode = false;
-      plumbClickStage = 0;
-      updatePlumbStatus("");
+      photoCanvas.width = 0;
+      photoCanvas.height = 0;
+      overlayCanvas.width = 0;
+      overlayCanvas.height = 0;
+      if (btnCalibrate) btnCalibrate.disabled = true;
+      updateCalStatus("Load a photo, then calibrate with the card.");
+      clearOverlay();
+      resetCardState();
       return;
     }
-
-    preview.innerHTML = '<canvas id="fluePreviewCanvas" class="preview-canvas"></canvas>';
-    fluePreviewCanvas = preview.querySelector("#fluePreviewCanvas");
-    previewImage = null;
-    if (!fluePreviewCanvas) return;
-    fluePreviewCanvas.addEventListener("click", handleCanvasClick);
     loadImage(job.image)
       .then((img) => {
-        if (fluePreviewCanvas) {
-          previewImage = img;
-          renderPreviewImage();
-          syncPlumbStatus();
+        previewImage = img;
+        const state = typeof IDCalib !== "undefined" ? IDCalib.getCalibState() : null;
+        if (state?.scalePxPerMm) {
+          updateCalStatus(`Scale: ${state.scalePxPerMm.toFixed(3)} px/mm`, true);
+        } else {
+          updateCalStatus("Not calibrated", false);
         }
+        drawPhoto();
+        if (btnCalibrate) btnCalibrate.disabled = false;
       })
       .catch(() => {
-        preview.innerHTML = '<span class="hint">Unable to load image preview.</span>';
-        fluePreviewCanvas = null;
-        previewImage = null;
+        updateCalStatus("Failed to load preview.");
       });
   };
 
-  if (job.image && detectBtn) detectBtn.disabled = false;
+  const handleOverlayClick = (event) => {
+    if (!plumbMarkMode || !overlayCanvas || tapSession) return;
+    const rect = overlayCanvas.getBoundingClientRect();
+    const scaleX = overlayCanvas.width / rect.width;
+    const scaleY = overlayCanvas.height / rect.height;
+    const x = (event.clientX - rect.left) * scaleX;
+    const y = (event.clientY - rect.top) * scaleY;
+    const calibration = ensureCalibrationShell();
 
-  refreshPreview();
+    if (plumbClickStage === 0) {
+      plumbClickStage = 1;
+      updatePlumbStatus("Tap the TOP of the plumb line...");
+    }
+    if (plumbClickStage === 1) {
+      calibration.plumbTopPx = [x, y];
+      delete calibration.plumbBottomPx;
+      calibration.plumbLengthMm = plumbConfig.lengthMm;
+      plumbClickStage = 2;
+      updatePlumbStatus("Tap the BOTTOM of the plumb line...");
+    } else if (plumbClickStage === 2) {
+      calibration.plumbBottomPx = [x, y];
+      calibration.plumbLengthMm = plumbConfig.lengthMm;
+      plumbClickStage = 0;
+      plumbMarkMode = false;
+      recalcScaleFromPlumb();
+      syncPlumbStatus();
+    }
+    refreshOverlayVisuals();
+  };
+
+  if (overlayCanvas) {
+    overlayCanvas.addEventListener("click", handleOverlayClick);
+  }
 
   if (fileInput) {
     fileInput.addEventListener("change", (event) => {
@@ -1241,12 +1330,111 @@ function renderFlueStep1() {
       const reader = new FileReader();
       reader.onload = (e) => {
         resetJob();
+        resetCardState();
         job.image = e.target?.result || null;
-        refreshPreview();
         if (detectBtn) detectBtn.disabled = !job.image;
+        plumbMarkMode = false;
+        plumbClickStage = 0;
+        syncPlumbStatus();
+        refreshPreview();
       };
       reader.readAsDataURL(file);
     });
+  }
+
+  if (btnCalibrate) {
+    const openCalModal = () => {
+      if (!previewImage || !calModal) return;
+      calModal.classList.remove("hidden");
+    };
+    const closeCalModal = () => {
+      if (calModal) calModal.classList.add("hidden");
+    };
+
+    btnCalibrate.addEventListener("click", openCalModal);
+    if (btnCloseModal) btnCloseModal.addEventListener("click", closeCalModal);
+
+    if (btnAutoDetect) {
+      btnAutoDetect.addEventListener("click", () => {
+        closeCalModal();
+        if (tapSession?.cancel) tapSession.cancel();
+        tapSession = null;
+        tapHint?.classList.add("hidden");
+        if (!photoCanvas || !photoCanvas.width) return;
+        const corners = IDCalib.detectCardCornersFromCanvas(photoCanvas);
+        if (!corners) {
+          updateCalStatus("Auto-detect failed – try manual taps.");
+          refreshOverlayVisuals();
+          return;
+        }
+        const scale = IDCalib.computeScaleFromCorners(corners);
+        ensureCalibrationShell();
+        job.calibration.pxPerMm = scale;
+        job.calibration.source = "idCardAuto";
+        job.calibration.cardCorners = corners;
+        refreshOverlayVisuals();
+        updateCalStatus(`Calibrated (auto): ${scale.toFixed(3)} px/mm`, true);
+      });
+    }
+
+    if (btnManualCorners) {
+      btnManualCorners.addEventListener("click", () => {
+        closeCalModal();
+        if (!overlayCanvas) return;
+        plumbMarkMode = false;
+        plumbClickStage = 0;
+        if (tapSession?.cancel) tapSession.cancel();
+        tapHint?.classList.remove("hidden");
+        tapSession = IDCalib.startManualCornerTap(
+          overlayCanvas,
+          (scale, cardCorners) => {
+            tapHint?.classList.add("hidden");
+            tapSession = null;
+            ensureCalibrationShell();
+            job.calibration.pxPerMm = scale;
+            job.calibration.source = "idCardManual";
+            job.calibration.cardCorners = cardCorners;
+            refreshOverlayVisuals();
+            updateCalStatus(`Calibrated (manual): ${scale.toFixed(3)} px/mm`, true);
+          },
+          () => {
+            tapHint?.classList.add("hidden");
+            tapSession = null;
+            updateCalStatus("Manual calibration cancelled");
+            refreshOverlayVisuals();
+          },
+          (ctx) => {
+            const w = overlayCanvas.width;
+            const h = overlayCanvas.height;
+            const aspect = IDCalib.CARD_WIDTH_MM / IDCalib.CARD_HEIGHT_MM;
+            let gw = w * 0.35;
+            let gh = gw / aspect;
+            if (gh > h * 0.6) {
+              gh = h * 0.6;
+              gw = gh * aspect;
+            }
+            const gx = (w - gw) / 2;
+            const gy = (h - gh) / 2;
+            ctx.save();
+            ctx.setLineDash([8, 6]);
+            ctx.strokeStyle = "rgba(255,255,255,0.35)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(gx, gy, gw, gh);
+            ctx.restore();
+          },
+        );
+      });
+    }
+
+    if (btnCancelTap) {
+      btnCancelTap.addEventListener("click", () => {
+        if (tapSession?.cancel) tapSession.cancel();
+        tapSession = null;
+        tapHint?.classList.add("hidden");
+        updateCalStatus("Manual calibration cancelled");
+        refreshOverlayVisuals();
+      });
+    }
   }
 
   if (markPlumbBtn) {
@@ -1259,10 +1447,11 @@ function renderFlueStep1() {
         updatePlumbStatus("Select an image first.");
         return;
       }
-      if (!fluePreviewCanvas) {
+      if (!overlayCanvas || !overlayCanvas.width) {
         updatePlumbStatus("Image preview not ready yet.");
         return;
       }
+      ensureCalibrationShell();
       plumbMarkMode = true;
       plumbClickStage = 1;
       updatePlumbStatus("Tap the TOP of the plumb line...");
@@ -1270,40 +1459,25 @@ function renderFlueStep1() {
   }
 
   if (detectBtn) {
+    detectBtn.disabled = !job.image;
     detectBtn.addEventListener("click", () => {
       if (!job.image) return;
-      job.calibration = {
-        pxPerMm: 4.0, // TEMP: will be recomputed just below
-        source: "mock",
-        sheetCornersPx: {
-          tl: [100, 100],
-          tr: [400, 100],
-          br: [400, 500],
-          bl: [100, 500],
-        },
-        homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
-        sheetWidthMm: sheetConfig.widthMm,
-        sheetHeightMm: sheetConfig.heightMm,
-      };
-      (function recalcMockScale() {
-        const c = job.calibration;
-        const { tl, tr, bl } = c.sheetCornersPx;
-        const dxW = tr[0] - tl[0];
-        const dyW = tr[1] - tl[1];
-        const dxH = bl[0] - tl[0];
-        const dyH = bl[1] - tl[1];
-        const distPxWidth = Math.hypot(dxW, dyW);
-        const distPxHeight = Math.hypot(dxH, dyH);
-
-        const pxPerMmW = distPxWidth / c.sheetWidthMm;
-        const pxPerMmH = distPxHeight / c.sheetHeightMm;
-        c.pxPerMm = (pxPerMmW + pxPerMmH) / 2;
-        c.source = "calibrationSheet";
-      })();
+      const state = typeof IDCalib !== "undefined" ? IDCalib.getCalibState() : null;
+      const pxPerMm = state?.scalePxPerMm;
+      if (!pxPerMm) {
+        updateCalStatus("Please calibrate with the card before continuing.");
+        return;
+      }
+      ensureCalibrationShell();
+      job.calibration.pxPerMm = pxPerMm;
+      job.calibration.source = job.calibration.source || "idCard";
       recalcScaleFromPlumb();
       setView("flueStep2");
     });
   }
+
+  refreshPreview();
+  syncPlumbStatus();
 }
 
 function renderSettings() {
@@ -1625,8 +1799,10 @@ function renderFlueStep2() {
 function renderFlueStep3() {
   const root = viewRoot();
   if (!root) return;
-  if (!job.image || !job.calibration || !job.flue) {
-    root.innerHTML = `<div class="view-header"><button class="btn secondary" data-nav='flueStep2'>&larr; Back</button><h2>Flue positioning &mdash; Step 3</h2><p class="hint">Complete the previous steps to continue.</p></div>`;
+  const calState = typeof IDCalib !== "undefined" ? IDCalib.getCalibState() : null;
+  const pxPerMm = calState?.scalePxPerMm || job.calibration?.pxPerMm || null;
+  if (!job.image || !job.flue || !pxPerMm) {
+    root.innerHTML = `<div class="view-header"><button class="btn secondary" data-nav='flueStep2'>&larr; Back</button><h2>Flue positioning &mdash; Step 3</h2><p class="hint">Load a calibrated photo and mark the flue before continuing.</p></div>`;
     const backBtn = root.querySelector("[data-nav='flueStep2']");
     if (backBtn) backBtn.addEventListener("click", () => setView("flueStep2"));
     return;
@@ -1674,19 +1850,19 @@ function renderFlueStep3() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const scale = info.scale;
-      const radiusPx = ((job.flue?.diameterMm || selectedOption.diameterMm || 100) * job.calibration.pxPerMm * scale) / 2;
+      const radiusPx = ((job.flue?.diameterMm || selectedOption.diameterMm || 100) * pxPerMm * scale) / 2;
       const centerX = job.flue.x * scale;
       const centerY = job.flue.y * scale;
 
       ctx.fillStyle = "rgba(39, 174, 96, 0.2)";
       ctx.beginPath();
-      ctx.arc(centerX, centerY, radiusPx + 150 * job.calibration.pxPerMm * scale, 0, Math.PI * 2);
+      ctx.arc(centerX, centerY, radiusPx + 150 * pxPerMm * scale, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = "rgba(231, 76, 60, 0.35)";
       ctx.beginPath();
       ctx.moveTo(centerX, centerY);
-      ctx.arc(centerX, centerY, radiusPx + 80 * job.calibration.pxPerMm * scale, -Math.PI / 4, Math.PI / 4);
+      ctx.arc(centerX, centerY, radiusPx + 80 * pxPerMm * scale, -Math.PI / 4, Math.PI / 4);
       ctx.closePath();
       ctx.fill();
 
@@ -1725,7 +1901,7 @@ function renderFlueStep3() {
         event.preventDefault();
         if (!job.flue) return;
         const nudgeMm = 10;
-        const nudgePx = nudgeMm * job.calibration.pxPerMm;
+        const nudgePx = nudgeMm * pxPerMm;
         const direction = button.dataset.direction;
         if (direction === "up") job.flue.y -= nudgePx;
         if (direction === "down") job.flue.y += nudgePx;
