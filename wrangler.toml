@@ -1,0 +1,13 @@
+name = "flue-genie-worker"
+main = "src/worker.js"
+compatibility_date = "2025-11-12"
+routes = []
+
+[observability]
+enabled = true
+
+[vars]
+ALLOWED_ORIGINS = "https://martinbibb-cmd.github.io"
+
+[env.preview.vars]
+ALLOWED_ORIGINS = "*"
