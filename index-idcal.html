@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Boiler Overlay – ID Card Calibration</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="idcal-styles.css" />
+</head>
+<body>
+  <header class="top-bar">
+    <h1>Boiler Overlay – ID Card Calibration</h1>
+    <p class="sub">Use a standard ID card (86 × 54 mm) or your magnetic reference card.</p>
+  </header>
+
+  <section class="controls">
+    <label class="file-label">
+      <span>1. Load a photo</span>
+      <input type="file" id="photoInput" accept="image/*" />
+    </label>
+
+    <button id="btnCalibrate" disabled>2. Calibrate with card</button>
+    <span id="calStatus" class="status">Not calibrated</span>
+  </section>
+
+  <section id="canvasSection">
+    <div id="canvasContainer">
+      <canvas id="photoCanvas"></canvas>
+      <canvas id="overlayCanvas"></canvas>
+    </div>
+  </section>
+
+  <!-- Calibration modal -->
+  <div id="calModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Card calibration</h2>
+      <p>
+        Make sure the card is clearly visible, flat against the boiler or wall,
+        in the same plane as the flue position.
+      </p>
+      <div class="modal-buttons">
+        <button id="btnAutoDetect">Auto-detect card</button>
+        <button id="btnManualCorners">Tap corners manually</button>
+      </div>
+      <button id="btnCloseModal" class="secondary">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Small hint for manual tapping -->
+  <div id="tapHint" class="tap-hint hidden">
+    Tap the card corners in order: top-left, top-right, bottom-right, bottom-left.
+    <button id="btnCancelTap" class="secondary small">Cancel</button>
+  </div>
+
+  <script src="idcal-calibration.js"></script>
+  <script src="idcal-overlay.js"></script>
+  <script src="idcal-main.js"></script>
+</body>
+</html>
